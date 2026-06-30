@@ -11,6 +11,14 @@ How it works
    auto-derived Category / Root cause / Suggested fix for each error.
 4. Adds a "Summary" sheet with overall totals and error counts per category.
 
+Selector syntax
+---------------
+SELECT supports any dbt node selector, e.g.:
+  - "tag:run_dwh"                                   (tag)
+  - "fqn:company_lakehouse.curated.dim.dim_account"  (fully-qualified name)
+  - "dim_account"                                    (model name)
+  - "dim_account+"                                   (model + downstream)
+
 Requirements
 ------------
     pip install openpyxl
@@ -32,27 +40,220 @@ from openpyxl.utils import get_column_letter
 # ---------------------------------------------------------------------------
 # Configuration -- edit these as needed
 # ---------------------------------------------------------------------------
-PROJECT_DIR = r"C:\Users\anhassan\airflow-dags\dbt"
-PROFILES_DIR = r"C:\Users\anhassan\airflow-dags\dbt"
-PROFILE = "company_lakehouse_pg"
-TARGET = "postgres_curated"
-SELECT_TAG = "tag:run_dwh"
+PROJECT_DIR   = r"C:\Users\anhassan\airflow-dags\dbt"
+PROFILES_DIR  = r"C:\Users\anhassan\airflow-dags\dbt"
+PROFILE       = "company_lakehouse_pg"
+TARGET        = "postgres_curated"
 
-# Shared parameter values for every model listed below
-AS_OF_DATE = "20260329"
-EXTRACTION_TIME_SLOT = 3
+# Any valid dbt selector: tag:, fqn:, model name, path, etc.
+# Examples:
+#   SELECT = "tag:run_dwh"
+#   SELECT = "fqn:company_lakehouse.curated.dim.dim_account"
+#   SELECT = "dim_account"
+SELECT = "tag:run_dwh"
 
+# Shared parameter values injected into every model in MODELS_IN_VARS
+AS_OF_DATE           = "20260329"
+EXTRACTION_TIME_SLOT = 4
+
+# ---------------------------------------------------------------------------
+# Full model list for --vars parameter_config
+#
+# This list must include every model that reads {{ var("parameter_config") }}.
+# It mirrors what Airflow/Cosmos injects at runtime so the script can be run
+# locally with the same variable payload.
+#
+# To run a single model quickly you can temporarily replace SELECT above with
+# an fqn: selector and keep this list as-is — the extra entries in
+# parameter_config are harmless; dbt only reads the key it needs.
+# ---------------------------------------------------------------------------
 MODELS_IN_VARS = [
-    "ref_app_device_os_type",
-    "ref_app_biometrics_type",
-    "dim_app_registered_users",
-    "ref_app_user_status_type",
-    "ref_app_device_status_type",
-    "ref_app_transaction_error",
+    "dim_sla",
+    "dim_card",
+    "dim_date",
+    "dim_goal",
+    "fct_case",
+    "dim_queue",
+    "fct_action",
+    "dim_account",
+    "fct_account",
+    "ref_t24_tax",
+    "dim_crm_team",
+    "dim_customer",
+    "fct_contract",
+    "ref_app_bank",
+    "ref_app_vote",
+    "ref_crm_city",
+    "ref_t24_user",
+    "fct_case_task",
+    "ref_gim_skill",
+    "fct_cust_limit",
+    "ref_crm_sector",
+    "ref_ni_country",
+    "ref_t24_rating",
+    "ref_t24_sector",
+    "ref_t24_target",
+    "dim_partnership",
+    "dim_savings_pot",
+    "fct_card_events",
+    "fct_interaction",
+    "ref_crm_country",
+    "ref_crm_process",
+    "ref_crm_product",
+    "ref_crm_section",
+    "ref_ni_currency",
+    "ref_t24_company",
+    "ref_t24_country",
+    "ref_t24_product",
+    "dim_card_account",
+    "fct_app_feedback",
+    "fct_app_transfer",
+    "fct_card_account",
+    "fct_cust_voucher",
+    "ref_app_channels",
+    "ref_app_language",
+    "ref_crm_currency",
+    "ref_crm_language",
+    "ref_t24_currency",
+    "ref_t24_industry",
+    "ref_t24_language",
+    "dim_sadad_billers",
+    "fct_cust_evidence",
+    "fct_cust_referral",
+    "fct_payment_order",
+    "ref_app_card_type",
+    "ref_crm_case_type",
+    "fct_resource_skill",
+    "ref_crm_occupation",
+    "ref_crm_profession",
+    "ref_crm_subproduct",
+    "ref_gim_media_type",
+    "dim_app_beneficiary",
+    "dim_content_details",
     "dim_crm_system_user",
+    "fct_app_gold_wallet",
+    "fct_app_mutual_fund",
+    "fct_card_attributes",
+    "fct_customer_blocks",
+    "ref_app_action_type",
+    "ref_app_iso_country",
+    "ref_app_limit_level",
+    "ref_crm_nationality",
+    "ref_crm_redeem_type",
+    "ref_ni_card_product",
+    "ref_t24_aa_activity",
+    "ref_t24_transaction",
+    "dim_app_mf_portfolio",
+    "dim_app_payment_case",
+    "dim_group_of_voucher",
+    "dim_sla_kpi_instance",
+    "fct_cust_interaction",
+    "fct_payment_schedule",
+    "ref_app_goal_product",
+    "ref_app_iso_currency",
+    "ref_app_notification",
+    "ref_app_partner_type",
+    "ref_ni_account_group",
+    "fct_agent_skill_level",
+    "fct_card_transactions",
+    "ref_app_action_status",
+    "ref_app_limit_segment",
+    "ref_app_sadad_billers",
+    "ref_ni_product_config",
+    "ref_app_device_os_type",
+    "ref_app_sadad_services",
+    "ref_app_sdr_ivr_status",
+    "dim_case_classification",
+    "fct_app_mf_transactions",
+    "fct_contract_attributes",
+    "fct_notification_status",
+    "fct_sadad_bill_payments",
+    "ref_app_biometrics_type",
+    "ref_app_mf_order_status",
+    "ref_app_partner_package",
+    "ref_app_transfer_reason",
+    "ref_crm_income_category",
+    "ref_crm_string_map_base",
+    "ref_ni_transaction_type",
+    "ref_t24_ac_balance_type",
+    "ref_t24_account_officer",
+    "ref_t24_customer_status",
+    "ref_t24_payment_purpose",
+    "dim_app_insurance_policy",
+    "dim_app_registered_users",
+    "dim_sadad_customer_bills",
+    "fct_arrangement_activity",
+    "fct_interaction_resource",
+    "fct_notification_details",
+    "fct_profit_loss_balances",
+    "ref_app_user_status_type",
+    "ref_crm_interaction_type",
+    "ref_crm_voucher_category",
+    "ref_gim_interaction_type",
+    "ref_t24_account_category",
+    "ref_t24_customer_segment",
+    "ref_t24_msg_payment_type",
+    "dim_t24_contract_balances",
+    "fct_account_locked_events",
+    "fct_app_customer_homepage",
+    "fct_app_gold_transactions",
+    "fct_interaction_mediation",
+    "fct_payment_order_charges",
+    "fct_t24_contract_balances",
+    "ref_app_card_product_type",
+    "ref_app_payment_case_type",
+    "ref_app_transaction_error",
+    "ref_app_transaction_types",
+    "dim_account_standing_order",
+    "fct_app_customer_audit_log",
+    "fct_customer_subscriptions",
+    "fct_financial_transactions",
+    "fct_limit_customer_actions",
+    "ref_app_device_status_type",
+    "ref_app_homepage_shortcuts",
+    "ref_app_http_response_code",
+    "ref_app_transaction_source",
+    "ref_app_transaction_status",
+    "ref_t24_tax_type_condition",
+    "dim_app_customer_nob_nafath",
+    "dim_notification_preference",
+    "ref_app_bill_category_types",
+    "ref_app_bill_payment_status",
+    "ref_app_goal_risk_appetites",
+    "ref_app_limit_weight_points",
+    "ref_app_subscription_status",
+    "ref_app_transfer_type_sarie",
+    "ref_t24_product_transaction",
+    "ref_t24_standing_order_type",
+    "dim_app_card_details_mapping",
+    "fct_app_notification_content",
+    "fct_profit_loss_transactions",
+    "ref_app_header_response_code",
+    "ref_app_transfer_action_type",
+    "ref_gim_technical_descriptor",
+    "ref_ni_transaction_condition",
+    "ref_t24_payment_order_status",
+    "fct_app_insurance_transaction",
+    "fct_resource_summarized_state",
+    "ref_app_homepage_herofeatures",
+    "ref_t24_payment_order_product",
+    "fct_payment_order_transactions",
+    "ref_crm_income_amount_category",
+    "ref_gim_interaction_descriptor",
+    "ref_t24_posting_restrict_block",
     "dim_app_registered_user_devices",
+    "fct_app_customer_lifestyle_pref",
+    "fct_resource_summarized_session",
     "fct_app_registered_user_sessions",
+    "ref_app_transfer_cb_request_type",
+    "ref_t24_account_locked_event_type",
+    "ref_t24_heavy_weight_product_cond",
+    "dim_app_mf_recurring_order_details",
+    "dim_notification_registered_mobile",
+    "fct_product_financial_transactions",
     "ref_app_reset_passcode_status_type",
+    "ref_t24_payment_txn_classification",
+    "fct_app_failed_card_creation_record",
 ]
 
 # Where to write the report (next to this script, timestamped)
@@ -76,7 +277,7 @@ def build_command() -> list[str]:
 
     return [
         "dbt", "run",
-        "--select", SELECT_TAG,
+        "--select", SELECT,
         # "--exclude", "dim_customer+",
         "--vars", vars_payload,
         "--project-dir", PROJECT_DIR,

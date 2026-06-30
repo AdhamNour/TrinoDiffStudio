@@ -47,7 +47,7 @@ DBT_VARS: dict[str, str] = {
 
 # Where to write the report (next to this script, timestamped)
 OUTPUT_XLSX = Path(__file__).with_name(
-    f"dbt_run_report_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    f"dbt_run_report_{datetime.now():%Y%m%d_%H%M%S}_t24.xlsx"
 )
 
 

@@ -29,8 +29,8 @@ from openpyxl.utils import get_column_letter
 # ---------------------------------------------------------------------------
 # Configuration -- edit these as needed
 # ---------------------------------------------------------------------------
-PROJECT_DIR = r"C:\Users\anhassan\airflow-dags\dbt"
-PROFILES_DIR = r"C:\Users\anhassan\airflow-dags\dbt"
+PROJECT_DIR = r"C:\Users\anhassan\gitlab_new_repo\airflow-dags\dbt"
+PROFILES_DIR = r"C:\Users\anhassan\gitlab_new_repo\airflow-dags\dbt"
 PROFILE = "company_lakehouse_pg"
 TARGET = "postgres_curated"
 SELECT_TAG = "tag:run_stg_t24"

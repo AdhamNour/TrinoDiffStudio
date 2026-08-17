@@ -271,6 +271,38 @@ Item {
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeSm
                     }
+
+                    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+                    // Notification Preferences
+                    Column {
+                        width: parent.width
+                        spacing: Theme.spacingXs
+
+                        Text {
+                            text: "🔔  Windows System Notifications"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                            font.weight: Font.DemiBold
+                            color: Theme.textPrimary
+                        }
+
+                        CheckBox {
+                            id: notifyTableCheck
+                            checked: backend.config.notify_table_complete !== false
+                            text: "Notify when each individual table diff finishes"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                        }
+
+                        CheckBox {
+                            id: notifyBatchCheck
+                            checked: backend.config.notify_batch_complete !== false
+                            text: "Notify when entire batch execution completes"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                        }
+                    }
                 }
             }
 
@@ -297,7 +329,9 @@ Item {
                             outputDirField.text,
                             excludeColsField.text,
                             excludeSuffixField.text,
-                            trimStringsCheck.checked
+                            trimStringsCheck.checked,
+                            notifyTableCheck.checked,
+                            notifyBatchCheck.checked
                         )
                     }
                 }

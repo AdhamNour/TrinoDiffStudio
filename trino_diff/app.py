@@ -14,7 +14,7 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QUrl, Qt
 
@@ -24,7 +24,7 @@ from trino_diff.backend.controller import BackendController
 def main():
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
-    app = QGuiApplication(sys.argv)
+    app = QApplication(sys.argv)
     app.setApplicationName("Trino Diff Studio")
     app.setOrganizationName("Nera")
 

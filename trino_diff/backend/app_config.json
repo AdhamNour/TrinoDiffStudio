@@ -10,5 +10,7 @@
     "excel_path": "C:\\Users\\anhassan\\nera_automations\\Oracle_to_Postgre_Business_Columns 2.xlsx",
     "exclude_columns": "extraction_timestamp",
     "exclude_suffix": "key",
-    "trim_strings": true
+    "trim_strings": true,
+    "notify_table_complete": true,
+    "notify_batch_complete": true
 }

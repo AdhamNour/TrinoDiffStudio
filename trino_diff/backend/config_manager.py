@@ -18,6 +18,8 @@ DEFAULT_CONFIG = {
     "exclude_columns": "extraction_timestamp",
     "exclude_suffix": "key",
     "trim_strings": True,
+    "notify_table_complete": True,
+    "notify_batch_complete": True,
 }
 
 

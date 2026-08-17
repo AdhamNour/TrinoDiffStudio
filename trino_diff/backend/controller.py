@@ -12,6 +12,7 @@ from trino_diff.backend.config_manager import load_config, save_config
 from trino_diff.backend.trino_client import test_trino_connection, fetch_trino_catalogs, get_trino_connection
 from trino_diff.backend.excel_loader import load_tables_from_excel
 from trino_diff.backend.worker import TrinoDiffWorker
+from trino_diff.backend.notifier import WindowsNotifier
 import generate_trino_diff
 
 
@@ -35,6 +36,7 @@ class BackendController(QObject):
     def __init__(self):
         super().__init__()
         self._config = load_config()
+        self._notifier = WindowsNotifier()
         self._catalogs = ["postgres", "oracle"]
         self._tables = []
         self._logs = []
@@ -313,6 +315,23 @@ class BackendController(QObject):
                 break
         self.tablesChanged.emit()
 
+        # Windows Notification for individual table completion
+        if self._config.get("notify_table_complete", True):
+            if status == "Completed":
+                if diff_count == 0:
+                    msg = "0 diffs found (datasets are fully in sync)."
+                    level = "success"
+                else:
+                    msg = f"Completed with {diff_count} diff row(s). Excel report generated."
+                    level = "warning"
+                self._notifier.notify(f"Diff Complete: {table_name}", msg, level=level)
+            elif status == "Error":
+                self._notifier.notify(
+                    f"Diff Failed: {table_name}",
+                    f"Encountered an error comparing {table_name}. Check logs for details.",
+                    level="error"
+                )
+
     def _onWorkerTableFinished(self, table_name: str, sql_file: str, xlsx_file: str):
         self.refreshOutputFiles()
 
@@ -333,6 +352,22 @@ class BackendController(QObject):
             self.notificationEmitted.emit("success", f"Execution complete: {success_cnt} table(s) processed.")
         else:
             self.notificationEmitted.emit("warning", f"Finished with {error_cnt} error(s). Check logs for details.")
+
+        # Windows Notification for batch completion
+        if self._config.get("notify_batch_complete", True):
+            total = success_cnt + error_cnt
+            if error_cnt == 0:
+                self._notifier.notify(
+                    "Trino Batch Completed",
+                    f"All {success_cnt} table diff(s) completed successfully.",
+                    level="success"
+                )
+            else:
+                self._notifier.notify(
+                    "Trino Batch Completed (with errors)",
+                    f"Processed {total} table(s): {success_cnt} succeeded, {error_cnt} failed.",
+                    level="warning"
+                )
 
     # -----------------------------------------------------------------------
     # SQL Preview Generation
@@ -477,7 +512,7 @@ class BackendController(QObject):
     # Settings
     # -----------------------------------------------------------------------
 
-    @Slot(str, int, str, str, str, str, str, str, str, bool)
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool)
     def updateSettings(
         self,
         host: str,
@@ -489,7 +524,9 @@ class BackendController(QObject):
         output_dir: str,
         exclude_cols: str,
         exclude_suf: str,
-        trim_strings: bool
+        trim_strings: bool,
+        notify_table: bool = True,
+        notify_batch: bool = True
     ):
         self._config["trino_host"] = host.strip()
         self._config["trino_port"] = port
@@ -501,6 +538,8 @@ class BackendController(QObject):
         self._config["exclude_columns"] = exclude_cols.strip()
         self._config["exclude_suffix"] = exclude_suf.strip()
         self._config["trim_strings"] = trim_strings
+        self._config["notify_table_complete"] = bool(notify_table)
+        self._config["notify_batch_complete"] = bool(notify_batch)
 
         save_config(self._config)
         self.configChanged.emit()

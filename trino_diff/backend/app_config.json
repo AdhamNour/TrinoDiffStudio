@@ -14,5 +14,6 @@
     "notify_table_complete": true,
     "notify_batch_complete": true,
     "ollama_url": "http://localhost:11434",
-    "ollama_model": "qwen2.5-coder:0.5b"
+    "ollama_model": "qwen2.5-coder:0.5b",
+    "auto_ai_diagnosis": true
 }

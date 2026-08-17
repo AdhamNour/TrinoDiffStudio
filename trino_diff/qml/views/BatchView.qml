@@ -324,13 +324,18 @@ Item {
 
                             // AI Fix button (shown for failing tables)
                             AppButton {
-                                text: "🤖 AI Fix"
-                                variant: "danger"
+                                text: modelData.ai_status === "Ready" ? "🤖 View AI Fix"
+                                    : (modelData.ai_status === "Diagnosing" ? "🤖 Diagnosing…" : "🤖 AI Fix")
+                                variant: modelData.ai_status === "Ready" ? "primary" : "danger"
                                 implicitHeight: 28
                                 customPaddingH: 8
                                 visible: modelData.status === "Error"
                                 ToolTip.visible: hovered
-                                ToolTip.text: "Ask Qwen 2.5-Coder to explain this Trino error and suggest a SQL fix"
+                                ToolTip.text: modelData.ai_status === "Ready"
+                                              ? "AI diagnosis and SQL fix are ready! Click to view."
+                                              : (modelData.ai_status === "Diagnosing"
+                                                 ? "Qwen 2.5-Coder is analyzing this error in parallel with Trino batch..."
+                                                 : "Ask Qwen 2.5-Coder to explain this Trino error and suggest a SQL fix")
                                 onClicked: backend.explainTableError(modelData.table_name)
                             }
 

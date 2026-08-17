@@ -6,29 +6,68 @@ import re
 
 def query_ollama(
     prompt: str,
+    system: str = "",
     model: str = "qwen2.5-coder:1.5b",
     base_url: str = "http://localhost:11434",
-    timeout: int = 60
+    timeout: int = 90
 ) -> dict:
     """
-    Query a local Ollama instance for text generation.
+    Query a local Ollama instance for text generation using /api/chat or /api/generate with system prompt.
     Returns dict with 'success': bool, 'response': str, 'error': str.
     """
-    endpoint = f"{base_url.rstrip('/')}/api/generate"
-    payload = {
+    # Try /api/chat first as it adheres best to instruction/coder system roles
+    chat_endpoint = f"{base_url.rstrip('/')}/api/chat"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    chat_payload = {
         "model": model,
-        "prompt": prompt,
+        "messages": messages,
         "stream": False,
         "options": {
-            "temperature": 0.2,
+            "temperature": 0.1,
             "top_p": 0.9,
         }
     }
 
     try:
-        data = json.dumps(payload).encode("utf-8")
+        data = json.dumps(chat_payload).encode("utf-8")
         req = urllib.request.Request(
-            endpoint,
+            chat_endpoint,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            if response.status == 200:
+                result = json.loads(response.read().decode("utf-8"))
+                generated_text = result.get("message", {}).get("content", "")
+                if generated_text:
+                    return {"success": True, "response": generated_text, "error": ""}
+    except Exception:
+        # Fallback to /api/generate if /api/chat is unavailable
+        pass
+
+    # Fallback /api/generate
+    gen_endpoint = f"{base_url.rstrip('/')}/api/generate"
+    gen_payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.1,
+            "top_p": 0.9,
+        }
+    }
+    if system:
+        gen_payload["system"] = system
+
+    try:
+        data = json.dumps(gen_payload).encode("utf-8")
+        req = urllib.request.Request(
+            gen_endpoint,
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST"

@@ -401,6 +401,13 @@ Item {
                             wrapMode: Text.Wrap
                         }
                     }
+                    CheckBox {
+                        id: autoAiCheck
+                        checked: backend.config.auto_ai_diagnosis !== false
+                        text: "Auto-diagnose Trino errors in background with AI during batch execution"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSm
+                    }
                 }
             }
 
@@ -431,7 +438,8 @@ Item {
                             notifyTableCheck.checked,
                             notifyBatchCheck.checked,
                             ollamaUrlField.text,
-                            ollamaModelField.text
+                            ollamaModelField.text,
+                            autoAiCheck.checked
                         )
                     }
                 }

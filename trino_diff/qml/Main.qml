@@ -48,6 +48,7 @@ ApplicationWindow {
             aiDiagnosisDialog.tableName = tableName
             aiDiagnosisDialog.errorMessage = backend.getTableErrorMessage(tableName)
             aiDiagnosisDialog.failedQuery = backend.getTableFailedQuery(tableName)
+            aiDiagnosisDialog.promptText = backend.getTableAiPrompt(tableName)
             aiDiagnosisDialog.isLoading = isLoading
             if (isLoading) {
                 aiDiagnosisDialog.explanationText = ""
@@ -60,6 +61,7 @@ ApplicationWindow {
             aiDiagnosisDialog.tableName = tableName
             aiDiagnosisDialog.errorMessage = backend.getTableErrorMessage(tableName)
             aiDiagnosisDialog.failedQuery = backend.getTableFailedQuery(tableName)
+            aiDiagnosisDialog.promptText = backend.getTableAiPrompt(tableName)
             aiDiagnosisDialog.explanationText = explanation
             aiDiagnosisDialog.suggestedSql = suggestedSql
             aiDiagnosisDialog.isLoading = false
@@ -69,6 +71,9 @@ ApplicationWindow {
 
         function onAiDiagnosisFailed(tableName, errorMsg) {
             aiDiagnosisDialog.tableName = tableName
+            aiDiagnosisDialog.errorMessage = backend.getTableErrorMessage(tableName)
+            aiDiagnosisDialog.failedQuery = backend.getTableFailedQuery(tableName)
+            aiDiagnosisDialog.promptText = backend.getTableAiPrompt(tableName)
             aiDiagnosisDialog.explanationText = "AI Diagnosis Error: " + errorMsg
             aiDiagnosisDialog.isLoading = false
             aiDiagnosisDialog.open()

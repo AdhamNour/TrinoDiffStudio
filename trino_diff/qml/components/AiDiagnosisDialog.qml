@@ -11,8 +11,9 @@ Dialog {
     property string failedQuery: ""
     property string explanationText: ""
     property string suggestedSql: ""
+    property string promptText: ""
     property bool   isLoading: false
-    property string activeTab: "diagnosis" // "diagnosis" | "sql" | "error"
+    property string activeTab: "diagnosis" // "diagnosis" | "sql" | "error" | "prompt"
 
     title: ""
     modal: true
@@ -66,7 +67,7 @@ Dialog {
                     }
 
                     Text {
-                        text: "Powered by Qwen 2.5 Coder (1.5B)  •  Table: " + root.tableName
+                        text: "Powered by " + (backend.config.ollama_model || "Qwen 2.5 Coder") + "  •  Table: " + root.tableName
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeXs
                         color: Theme.accentCyan
@@ -108,6 +109,14 @@ Dialog {
                     onClicked: root.activeTab = "sql"
                 }
 
+                AppButton {
+                    text: "📋 AI Prompt Sent"
+                    variant: root.activeTab === "prompt" ? "primary" : "ghost"
+                    implicitHeight: 32
+                    visible: root.promptText !== ""
+                    onClicked: root.activeTab = "prompt"
+                }
+
                 Item { width: 16 }
 
                 AppButton {
@@ -115,7 +124,7 @@ Dialog {
                     variant: "secondary"
                     implicitHeight: 32
                     enabled: !root.isLoading && root.tableName !== ""
-                    onClicked: backend.explainTableError(root.tableName)
+                    onClicked: backend.explainTableError(root.tableName, true)
                 }
             }
 
@@ -207,6 +216,7 @@ Dialog {
                         TextArea {
                             width: parent.width
                             text: root.explanationText || "Click 'Re-analyze' to generate AI diagnosis."
+                            textFormat: TextEdit.MarkdownText
                             readOnly: true
                             font.family: Theme.fontFamily
                             font.pixelSize: Theme.fontSizeBase
@@ -215,6 +225,7 @@ Dialog {
                             selectionColor: Theme.primary
                             wrapMode: TextEdit.Wrap
                             background: null
+                            selectByMouse: true
                         }
                     }
                 }
@@ -352,6 +363,71 @@ Dialog {
                                 selectionColor: Theme.primary
                                 selectedTextColor: "#FFFFFF"
                                 wrapMode: TextEdit.NoWrap
+                                background: null
+                            }
+                        }
+                    }
+                }
+
+                // Tab 4: Prompt Sent View
+                ScrollView {
+                    id: promptScrollView
+                    anchors.fill: parent
+                    anchors.margins: Theme.spacingMd
+                    clip: true
+                    visible: !root.isLoading && root.activeTab === "prompt"
+
+                    Column {
+                        width: promptScrollView.width - 24
+                        spacing: Theme.spacingMd
+
+                        Row {
+                            width: parent.width
+                            spacing: Theme.spacingMd
+
+                            Text {
+                                text: "Exact Prompt Sent to AI (" + (backend.config.ollama_model || "Ollama") + "):"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSm
+                                font.weight: Font.DemiBold
+                                color: Theme.accentCyan
+                                width: parent.width - copyPromptBtn.width - 12
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            AppButton {
+                                id: copyPromptBtn
+                                text: "⎘ Copy Prompt"
+                                variant: "secondary"
+                                implicitHeight: 30
+                                anchors.verticalCenter: parent.verticalCenter
+                                onClicked: {
+                                    promptSentText.selectAll()
+                                    promptSentText.copy()
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            implicitHeight: Math.max(260, promptSentText.implicitHeight + 24)
+                            color: "#080C14"
+                            radius: 4
+                            border.color: Theme.border
+                            border.width: 1
+
+                            TextArea {
+                                id: promptSentText
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                text: root.promptText || "-- No prompt recorded"
+                                readOnly: true
+                                font.family: Theme.monoFontFamily
+                                font.pixelSize: Theme.fontSizeXs
+                                color: "#93C5FD"
+                                selectionColor: Theme.primary
+                                selectedTextColor: "#FFFFFF"
+                                wrapMode: TextEdit.Wrap
                                 background: null
                             }
                         }

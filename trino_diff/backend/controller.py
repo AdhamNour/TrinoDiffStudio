@@ -319,17 +319,31 @@ class BackendController(QObject):
         self.statusTextChanged.emit()
 
     def _onWorkerTableError(self, table_name: str, error_msg: str, query: str):
+        auto_ai = self._config.get("auto_ai_diagnosis", True)
         self._table_errors[table_name] = {
             "error": error_msg,
             "query": query,
-            "timestamp": datetime.now().strftime("%H:%M:%S")
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "explanation": "",
+            "suggested_sql": "",
+            "prompt": "",
+            "diagnosed_error": ""
         }
         for t in self._tables:
             if t["table_name"] == table_name:
                 t["error_message"] = error_msg
                 t["failed_query"] = query
+                t["ai_status"] = "Diagnosing" if auto_ai else "Idle"
+                t["ai_explanation"] = ""
+                t["suggested_sql"] = ""
+                t["ai_prompt"] = ""
                 break
         self.tablesChanged.emit()
+
+        # Automatically start AI error diagnosis in parallel with ongoing Trino processing
+        if auto_ai:
+            self.appendLog("INFO", f"[AI Assistant] Initiating parallel background AI diagnosis for {table_name}...")
+            self._runAsyncAiDiagnosis(table_name, error_msg, query, notify_ui=False)
 
     def _onWorkerTableStatus(self, table_name: str, status: str, diff_count: int):
         for t in self._tables:
@@ -571,78 +585,167 @@ class BackendController(QObject):
     # AI Diagnosis (Qwen 2.5 Coder via Ollama)
     # -----------------------------------------------------------------------
 
-    @Slot(str)
-    def explainTableError(self, table_name: str):
+    def _runAsyncAiDiagnosis(self, table_name: str, error_msg: str, failed_query: str, notify_ui: bool = False):
         clean_name = table_name.strip()
-        err_info = self._table_errors.get(clean_name, {})
-        error_msg = err_info.get("error", "")
-        failed_query = err_info.get("query", "")
-
-        if not error_msg:
-            for t in self._tables:
-                if t["table_name"] == clean_name:
-                    error_msg = t.get("error_message", "")
-                    failed_query = t.get("failed_query", "")
-                    break
-
-        if not error_msg:
-            error_msg = "Unknown error occurred during Trino execution."
-
-        # Notify UI immediately to open dialog and show animated spinner
-        self.aiDiagnosisLoading.emit(clean_name, True)
-        self.appendLog("INFO", f"[AI Assistant] Asking Qwen 2.5-Coder to analyze Trino error for {clean_name}...")
-
         config_copy = self._config.copy()
+
+        if notify_ui:
+            self.aiDiagnosisLoading.emit(clean_name, True)
 
         def _ai_task():
             try:
                 ollama_url = config_copy.get("ollama_url", "http://localhost:11434")
                 model = config_copy.get("ollama_model", "qwen2.5-coder:1.5b")
 
-                prompt = f"""You are an expert Trino SQL engineer and database administrator.
-A Trino cross-database comparison query between Oracle and PostgreSQL failed with an error.
+                system_prompt = (
+                    "You are an expert Trino SQL database engineer and performance specialist. "
+                    "Your task is to diagnose Trino query failures, explain the specific root cause based strictly "
+                    "on the provided Trino error and failed query, and provide the exact corrected, executable Trino SQL query."
+                )
 
-TABLE NAME: {clean_name}
+                user_prompt = f"""### Target Table: `{clean_name}`
 
-TRINO ERROR:
+#### Trino Error Message:
+```
 {error_msg}
+```
 
-FAILED TRINO SQL QUERY:
-{failed_query if failed_query else "(Query could not be generated due to metadata error)"}
+#### Executed Trino SQL Query:
+```sql
+{failed_query if failed_query else "-- (Query could not be generated due to metadata error)"}
+```
 
-Please provide an in-depth analysis and concrete fix:
-1. Explain clearly why this Trino error occurred (e.g. data type mismatch like VARCHAR vs TIMESTAMP, improper CAST, missing column, NULL comparison, date syntax, catalog qualification, or reserved keyword).
-2. Detail how to fix it in Trino SQL.
-3. Provide the full corrected Trino SQL query enclosed in a ```sql ... ``` code block.
-"""
-                print(f"\n--- [PROMPT PASSED TO QWEN ({model})] ---\n{prompt}\n----------------------------------------\n")
-                self.appendLog("INFO", f"[AI Prompt sent to Qwen ({model}) for {clean_name}]")
+#### Instructions:
+Please provide a well-formatted Markdown response structured with the following sections:
+- **Root Cause**: Identify and explain the exact cause of this specific Trino error in the query.
+- **Fix Strategy**: Outline the necessary SQL adjustments (e.g. correct type casting, date formatting, column qualification).
+- **Corrected Query**: Provide the complete, valid, executable Trino SQL query enclosed in a ```sql ... ``` code block."""
 
-                # Native OS thread releases Python GIL during socket I/O
-                res = query_ollama(prompt, model=model, base_url=ollama_url, timeout=90)
+                full_logged_prompt = f"--- [System Prompt] ---\n{system_prompt}\n\n--- [User Prompt] ---\n{user_prompt}"
+
+                print(f"\n--- [PROMPT PASSED TO QWEN ({model}) FOR {clean_name}] ---\n{full_logged_prompt}\n----------------------------------------\n")
+                
+                # Log full prompt to the UI logging screen
+                self.appendLog("INFO", f"[AI Assistant] Prompt sent to {model} for '{clean_name}':\n{user_prompt}")
+
+                # Store prompt in cache
+                if clean_name in self._table_errors:
+                    self._table_errors[clean_name]["prompt"] = full_logged_prompt
+                    self._table_errors[clean_name]["diagnosed_error"] = error_msg
+                for t in self._tables:
+                    if t["table_name"] == clean_name:
+                        t["ai_prompt"] = full_logged_prompt
+                        break
+
+                res = query_ollama(
+                    prompt=user_prompt,
+                    system=system_prompt,
+                    model=model,
+                    base_url=ollama_url,
+                    timeout=90
+                )
+
                 if res["success"]:
                     explanation = res["response"]
                     suggested_sql = extract_sql_from_response(explanation)
-                    self._onAiDiagnosisFinished(clean_name, explanation, suggested_sql)
+                    self._onAiDiagnosisFinished(clean_name, explanation, suggested_sql, notify_ui)
                 else:
-                    self._onAiDiagnosisFailed(clean_name, res["error"])
+                    self._onAiDiagnosisFailed(clean_name, res["error"], notify_ui)
             except Exception as ex:
-                self._onAiDiagnosisFailed(clean_name, f"Unexpected error during AI diagnosis: {ex}")
+                self._onAiDiagnosisFailed(clean_name, f"Unexpected error during AI diagnosis: {ex}", notify_ui)
 
-        # Start native background OS thread
         worker_thread = threading.Thread(target=_ai_task, daemon=True)
         worker_thread.start()
 
-    def _onAiDiagnosisFinished(self, table_name: str, explanation: str, suggested_sql: str):
-        self.aiDiagnosisLoading.emit(table_name, False)
-        self.aiDiagnosisReady.emit(table_name, explanation, suggested_sql)
-        self.appendLog("SUCCESS", f"[AI Assistant] Diagnosis & suggested fix generated for {table_name}.")
+    def _onAiDiagnosisFinished(self, table_name: str, explanation: str, suggested_sql: str, notify_ui: bool):
+        if table_name in self._table_errors:
+            self._table_errors[table_name]["explanation"] = explanation
+            self._table_errors[table_name]["suggested_sql"] = suggested_sql
 
-    def _onAiDiagnosisFailed(self, table_name: str, error_msg: str):
-        self.aiDiagnosisLoading.emit(table_name, False)
-        self.aiDiagnosisFailed.emit(table_name, error_msg)
-        self.appendLog("ERROR", f"[AI Assistant] Diagnosis failed for {table_name}: {error_msg}")
-        self.notificationEmitted.emit("error", f"AI Diagnosis failed: {error_msg}")
+        for t in self._tables:
+            if t["table_name"] == table_name:
+                t["ai_status"] = "Ready"
+                t["ai_explanation"] = explanation
+                t["suggested_sql"] = suggested_sql
+                break
+        self.tablesChanged.emit()
+        self.appendLog("SUCCESS", f"[AI Assistant] Diagnosis ready for '{table_name}':\n{explanation}")
+
+        if notify_ui:
+            self.aiDiagnosisLoading.emit(table_name, False)
+            self.aiDiagnosisReady.emit(table_name, explanation, suggested_sql)
+
+    def _onAiDiagnosisFailed(self, table_name: str, error_msg: str, notify_ui: bool):
+        for t in self._tables:
+            if t["table_name"] == table_name:
+                t["ai_status"] = "Failed"
+                t["ai_error"] = error_msg
+                break
+        self.tablesChanged.emit()
+        self.appendLog("ERROR", f"[AI Assistant] Background diagnosis failed for {table_name}: {error_msg}")
+
+        if notify_ui:
+            self.aiDiagnosisLoading.emit(table_name, False)
+            self.aiDiagnosisFailed.emit(table_name, error_msg)
+            self.notificationEmitted.emit("error", f"AI Diagnosis failed: {error_msg}")
+
+    @Slot(str)
+    @Slot(str, bool)
+    def explainTableError(self, table_name: str, force: bool = False):
+        clean_name = table_name.strip()
+        err_info = self._table_errors.get(clean_name, {})
+        error_msg = err_info.get("error", "")
+        failed_query = err_info.get("query", "")
+        explanation = err_info.get("explanation", "")
+        suggested_sql = err_info.get("suggested_sql", "")
+        diagnosed_error = err_info.get("diagnosed_error", "")
+        ai_status = ""
+
+        for t in self._tables:
+            if t["table_name"] == clean_name:
+                if not error_msg:
+                    error_msg = t.get("error_message", "")
+                    failed_query = t.get("failed_query", "")
+                if not explanation and t.get("ai_explanation"):
+                    explanation = t.get("ai_explanation", "")
+                    suggested_sql = t.get("suggested_sql", "")
+                ai_status = t.get("ai_status", "")
+                break
+
+        # If not forcing re-analysis, and an existing diagnosis matches the error, deliver immediately
+        if not force and explanation and (not diagnosed_error or diagnosed_error == error_msg):
+            self.aiDiagnosisLoading.emit(clean_name, False)
+            self.aiDiagnosisReady.emit(clean_name, explanation, suggested_sql)
+            return
+
+        # If currently being diagnosed in parallel and not forcing, open dialog in loading mode
+        if not force and ai_status == "Diagnosing":
+            self.aiDiagnosisLoading.emit(clean_name, True)
+            return
+
+        # Clear cached diagnosis for a fresh run
+        if clean_name in self._table_errors:
+            self._table_errors[clean_name]["explanation"] = ""
+            self._table_errors[clean_name]["suggested_sql"] = ""
+            self._table_errors[clean_name]["prompt"] = ""
+            self._table_errors[clean_name]["diagnosed_error"] = ""
+
+        for t in self._tables:
+            if t["table_name"] == clean_name:
+                t["ai_status"] = "Diagnosing"
+                t["ai_explanation"] = ""
+                t["suggested_sql"] = ""
+                t["ai_prompt"] = ""
+                break
+        self.tablesChanged.emit()
+
+        if not error_msg:
+            error_msg = "Unknown error occurred during Trino execution."
+
+        # Trigger new diagnosis with UI feedback
+        self.aiDiagnosisLoading.emit(clean_name, True)
+        self.appendLog("INFO", f"[AI Assistant] Asking Ollama to analyze Trino error for {clean_name}...")
+        self._runAsyncAiDiagnosis(clean_name, error_msg, failed_query, notify_ui=True)
 
     @Slot(str, result=str)
     def getTableErrorMessage(self, table_name: str) -> str:
@@ -662,6 +765,36 @@ Please provide an in-depth analysis and concrete fix:
         for t in self._tables:
             if t["table_name"] == clean_name:
                 return t.get("failed_query", "")
+        return ""
+
+    @Slot(str, result=str)
+    def getTableAiExplanation(self, table_name: str) -> str:
+        clean_name = table_name.strip()
+        if clean_name in self._table_errors:
+            return self._table_errors[clean_name].get("explanation", "")
+        for t in self._tables:
+            if t["table_name"] == clean_name:
+                return t.get("ai_explanation", "")
+        return ""
+
+    @Slot(str, result=str)
+    def getTableSuggestedSql(self, table_name: str) -> str:
+        clean_name = table_name.strip()
+        if clean_name in self._table_errors:
+            return self._table_errors[clean_name].get("suggested_sql", "")
+        for t in self._tables:
+            if t["table_name"] == clean_name:
+                return t.get("suggested_sql", "")
+        return ""
+
+    @Slot(str, result=str)
+    def getTableAiPrompt(self, table_name: str) -> str:
+        clean_name = table_name.strip()
+        if clean_name in self._table_errors:
+            return self._table_errors[clean_name].get("prompt", "")
+        for t in self._tables:
+            if t["table_name"] == clean_name:
+                return t.get("ai_prompt", "")
         return ""
 
     @Slot(str, str)
@@ -691,7 +824,7 @@ Please provide an in-depth analysis and concrete fix:
     # Settings
     # -----------------------------------------------------------------------
 
-    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str)
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str, bool)
     def updateSettings(
         self,
         host: str,
@@ -707,7 +840,8 @@ Please provide an in-depth analysis and concrete fix:
         notify_table: bool = True,
         notify_batch: bool = True,
         ollama_url: str = "http://localhost:11434",
-        ollama_model: str = "qwen2.5-coder:1.5b"
+        ollama_model: str = "qwen2.5-coder:1.5b",
+        auto_ai: bool = True
     ):
         self._config["trino_host"] = host.strip()
         self._config["trino_port"] = port
@@ -723,6 +857,7 @@ Please provide an in-depth analysis and concrete fix:
         self._config["notify_batch_complete"] = bool(notify_batch)
         self._config["ollama_url"] = ollama_url.strip() or "http://localhost:11434"
         self._config["ollama_model"] = ollama_model.strip() or "qwen2.5-coder:1.5b"
+        self._config["auto_ai_diagnosis"] = bool(auto_ai)
 
         save_config(self._config)
         self.configChanged.emit()

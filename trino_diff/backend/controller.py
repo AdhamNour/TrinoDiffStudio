@@ -46,6 +46,9 @@ class BackendController(QObject):
         self._worker_thread = None
         self._worker = None
 
+        # Initial startup log
+        self.appendLog("INFO", "Trino Diff Studio initialized. System ready.")
+
         # Load initial excel if present
         excel_path = self._config.get("excel_path", "")
         if excel_path and os.path.exists(excel_path):

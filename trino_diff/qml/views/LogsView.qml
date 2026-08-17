@@ -11,12 +11,30 @@ Item {
     property string levelFilter: "ALL"
     property bool autoScroll: true
 
+    // Fully reactive filtered logs property bound to backend.logs, levelFilter, and searchFilter
+    property var filteredLogs: {
+        var raw = backend.logs || []
+        var lvl = root.levelFilter
+        var srch = root.searchFilter
+        var result = []
+        for (var i = 0; i < raw.length; i++) {
+            var l = raw[i]
+            if (lvl !== "ALL") {
+                if (lvl === "WARN" && l.level !== "WARN" && l.level !== "WARNING") continue
+                if (lvl !== "WARN" && l.level !== lvl) continue
+            }
+            if (srch && (!l.message || l.message.toLowerCase().indexOf(srch) === -1)) continue
+            result.push(l)
+        }
+        return result
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.spacingLg
         spacing: Theme.spacingMd
 
-        // Top Toolbar
+        // Top Toolbar Row
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.spacingMd
@@ -42,6 +60,8 @@ Item {
 
             Row {
                 spacing: 4
+                Layout.alignment: Qt.AlignVCenter
+
                 AppButton {
                     text: "All"
                     variant: root.levelFilter === "ALL" ? "primary" : "ghost"
@@ -76,29 +96,48 @@ Item {
 
             Rectangle {
                 width: 1
-                Layout.fillHeight: true
+                height: 24
+                Layout.alignment: Qt.AlignVCenter
                 color: Theme.border
             }
 
             CheckBox {
                 checked: root.autoScroll
                 text: "Auto-scroll"
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeSm
+                Layout.alignment: Qt.AlignVCenter
                 onToggled: root.autoScroll = checked
             }
 
             AppButton {
                 text: "Clear Logs"
                 variant: "ghost"
+                implicitHeight: 32
+                Layout.alignment: Qt.AlignVCenter
                 onClicked: backend.clearLogs()
             }
         }
 
-        // Search Filter
-        AppTextField {
-            id: logSearchInput
+        // Search Filter Bar
+        RowLayout {
             Layout.fillWidth: true
-            placeholderText: "🔍 Filter logs by text or keyword..."
-            onTextChanged: root.searchFilter = logSearchInput.text.toLowerCase().trim()
+            spacing: Theme.spacingMd
+
+            AppTextField {
+                id: logSearchInput
+                Layout.fillWidth: true
+                placeholderText: "🔍 Filter logs by text or keyword..."
+                onTextChanged: root.searchFilter = logSearchInput.text.toLowerCase().trim()
+            }
+
+            Text {
+                text: root.filteredLogs.length + " log entry(ies)"
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeSm
+                color: Theme.textMuted
+                Layout.alignment: Qt.AlignVCenter
+            }
         }
 
         // Console Log Area
@@ -109,88 +148,103 @@ Item {
             radius: Theme.radiusMd
             border.color: Theme.border
             border.width: 1
+            clip: true
 
-            ScrollView {
-                id: scrollView
+            ListView {
+                id: logListView
                 anchors.fill: parent
                 anchors.margins: Theme.spacingSm
                 clip: true
+                spacing: 4
+                model: root.filteredLogs
 
-                ListView {
-                    id: logListView
-                    width: parent.width
-                    spacing: 2
-                    model: getFilteredLogs()
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                }
 
-                    delegate: Rectangle {
-                        width: logListView.width
-                        implicitHeight: logRow.implicitHeight + 6
-                        color: index % 2 === 0 ? "transparent" : "#080C14"
-                        radius: 2
+                delegate: Rectangle {
+                    width: logListView.width - 12
+                    implicitHeight: logRow.implicitHeight + 8
+                    color: index % 2 === 0 ? "transparent" : "#080C14"
+                    radius: 3
 
-                        RowLayout {
-                            id: logRow
-                            anchors.fill: parent
-                            anchors.leftMargin: 8
-                            anchors.rightMargin: 8
-                            spacing: Theme.spacingSm
+                    RowLayout {
+                        id: logRow
+                        width: parent.width - 16
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        spacing: Theme.spacingSm
 
-                            Text {
-                                text: modelData.timestamp || ""
-                                font.family: Theme.monoFontFamily
-                                font.pixelSize: Theme.fontSizeXs
-                                color: Theme.textMuted
-                            }
+                        Text {
+                            text: modelData.timestamp || ""
+                            font.family: Theme.monoFontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textMuted
+                            Layout.alignment: Qt.AlignVCenter
+                        }
 
-                            Rectangle {
-                                implicitWidth: 64
-                                implicitHeight: 18
-                                radius: 3
-                                color: getTagBg(modelData.level)
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: modelData.level || "INFO"
-                                    font.family: Theme.monoFontFamily
-                                    font.pixelSize: 10
-                                    font.weight: Font.Bold
-                                    color: getTagColor(modelData.level)
-                                }
-                            }
+                        Rectangle {
+                            implicitWidth: 64
+                            implicitHeight: 18
+                            radius: 3
+                            color: root.getTagBg(modelData.level)
+                            Layout.alignment: Qt.AlignVCenter
 
                             Text {
-                                Layout.fillWidth: true
-                                text: modelData.message || ""
+                                anchors.centerIn: parent
+                                text: modelData.level || "INFO"
                                 font.family: Theme.monoFontFamily
-                                font.pixelSize: Theme.fontSizeXs
-                                color: getMessageColor(modelData.level)
-                                wrapMode: Text.WrapAnywhere
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: root.getTagColor(modelData.level)
                             }
                         }
-                    }
 
-                    onCountChanged: {
-                        if (root.autoScroll && count > 0) {
-                            logListView.positionViewAtEnd()
+                        Text {
+                            Layout.fillWidth: true
+                            text: modelData.message || ""
+                            font.family: Theme.monoFontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: root.getMessageColor(modelData.level)
+                            wrapMode: Text.WrapAnywhere
+                            Layout.alignment: Qt.AlignVCenter
                         }
                     }
                 }
-            }
-        }
-    }
 
-    function getFilteredLogs() {
-        var result = []
-        for (var i = 0; i < backend.logs.length; i++) {
-            var l = backend.logs[i]
-            if (root.levelFilter !== "ALL") {
-                if (root.levelFilter === "WARN" && l.level !== "WARN" && l.level !== "WARNING") continue
-                if (root.levelFilter !== "WARN" && l.level !== root.levelFilter) continue
+                onCountChanged: {
+                    if (root.autoScroll && count > 0) {
+                        logListView.positionViewAtEnd()
+                    }
+                }
             }
-            if (root.searchFilter && l.message.toLowerCase().indexOf(root.searchFilter) === -1) continue
-            result.push(l)
+
+            // Empty state overlay
+            Column {
+                anchors.centerIn: parent
+                spacing: Theme.spacingSm
+                visible: root.filteredLogs.length === 0
+
+                Text {
+                    text: root.searchFilter !== "" ? "🔍 No logs match your filter" : "📝 Execution Console Ready"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeBase
+                    font.weight: Font.DemiBold
+                    color: Theme.textSecondary
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                Text {
+                    text: root.searchFilter !== ""
+                        ? "Try clearing the search query or changing the log level filter."
+                        : "Real-time logs from diff generation, batch runs, and connection checks will appear here."
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeXs
+                    color: Theme.textMuted
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
         }
-        return result
     }
 
     function getTagColor(level) {

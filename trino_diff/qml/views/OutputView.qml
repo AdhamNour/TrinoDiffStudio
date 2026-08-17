@@ -10,6 +10,20 @@ Item {
     property string searchFilter: ""
     property string typeFilter: "ALL"
 
+    property var filteredFiles: {
+        var raw = backend.outputFiles || []
+        var tf = root.typeFilter
+        var sf = root.searchFilter
+        var res = []
+        for (var i = 0; i < raw.length; i++) {
+            var f = raw[i]
+            if (tf !== "ALL" && f.type !== tf) continue
+            if (sf && f.name.toLowerCase().indexOf(sf) === -1) continue
+            res.push(f)
+        }
+        return res
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.spacingLg
@@ -89,7 +103,7 @@ Item {
             Item { Layout.fillWidth: true }
 
             Text {
-                text: getFilteredFiles().length + " file(s)"
+                text: root.filteredFiles.length + " file(s)"
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeSm
                 color: Theme.textMuted
@@ -115,7 +129,7 @@ Item {
                     id: fileListView
                     width: parent.width
                     spacing: 6
-                    model: getFilteredFiles()
+                    model: root.filteredFiles
 
                     delegate: Rectangle {
                         width: fileListView.width - 12
@@ -200,7 +214,7 @@ Item {
             Column {
                 anchors.centerIn: parent
                 spacing: Theme.spacingSm
-                visible: getFilteredFiles().length === 0
+                visible: root.filteredFiles.length === 0
 
                 Text {
                     text: "📂 No Output Files Found"

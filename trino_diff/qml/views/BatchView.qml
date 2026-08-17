@@ -10,6 +10,19 @@ Item {
 
     property string searchFilter: ""
 
+    property var filteredTables: {
+        var raw = backend.tables || []
+        var filter = root.searchFilter
+        if (!filter) return raw
+        var res = []
+        for (var i = 0; i < raw.length; i++) {
+            var t = raw[i]
+            if (t.table_name && t.table_name.toLowerCase().indexOf(filter) !== -1)
+                res.push(t)
+        }
+        return res
+    }
+
     FileDialog {
         id: fileDialog
         title: "Select Business Columns Excel File"
@@ -194,7 +207,7 @@ Item {
                     id: tableListView
                     width: parent.width
                     spacing: 5
-                    model: getFilteredTables()
+                    model: root.filteredTables
 
                     delegate: Rectangle {
                         width: tableListView.width - 10

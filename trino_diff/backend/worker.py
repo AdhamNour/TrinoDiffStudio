@@ -293,6 +293,25 @@ def export_diff_to_excel(df: pd.DataFrame, xlsx_file: str, table_name: str, id_c
     wb.save(xlsx_file)
 
 
+MAX_EXCEL_ROWS = 1048576
+
+
+def export_diff_to_parquet(df: pd.DataFrame, parquet_file: str, table_name: str, id_cols: list):
+    """
+    Export DataFrame to Apache Parquet format for large datasets exceeding Excel's 1,048,576 row limit.
+    """
+    try:
+        df.to_parquet(parquet_file, index=False)
+    except Exception as e:
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            table = pa.Table.from_pandas(df)
+            pq.write_table(table, parquet_file)
+        except Exception as pa_err:
+            raise RuntimeError(f"Could not export Parquet file: {e}. (PyArrow error: {pa_err})")
+
+
 # ---------------------------------------------------------------------------
 # Worker Object
 # ---------------------------------------------------------------------------
@@ -305,6 +324,7 @@ class TrinoDiffWorker(QObject):
     progressUpdated = Signal(int, int, str)   # (current, total, current_table_name)
     tableStatusUpdated = Signal(str, str, int)# (table_name, status, diff_count)
     tableFinished = Signal(str, str, str)     # (table_name, sql_file, xlsx_file)
+    tableErrorOccurred = Signal(str, str, str)# (table_name, error_message, failed_query)
     allFinished = Signal(int, int)            # (success_count, error_count)
 
     def __init__(self, tasks: list, config: dict):
@@ -364,7 +384,7 @@ class TrinoDiffWorker(QObject):
             clean_name = table_name.replace(".", "_")
             run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             sql_file = os.path.join(output_dir, f"{clean_name}_diff.sql")
-            xlsx_file = os.path.join(output_dir, f"{clean_name}_diff_{run_ts}.xlsx")
+            query = ""
 
             try:
                 cursor = conn.cursor()
@@ -417,12 +437,19 @@ class TrinoDiffWorker(QObject):
                 diff_count = len(df)
                 self.logEmitted.emit("INFO", f"[{table_name}] Query returned {diff_count} diff row(s)")
 
-                # Export to Excel
-                export_diff_to_excel(df, xlsx_file, table_name, id_cols)
-                self.logEmitted.emit("SUCCESS", f"[{table_name}] Saved report → {os.path.basename(xlsx_file)}")
+                # Export to Parquet (if > 1,048,576 rows) or Excel
+                if diff_count > MAX_EXCEL_ROWS:
+                    report_file = os.path.join(output_dir, f"{clean_name}_diff_{run_ts}.parquet")
+                    self.logEmitted.emit("WARN", f"[{table_name}] Result row count ({diff_count:,}) exceeds Excel maximum limit of 1,048,576. Saving to Parquet format.")
+                    export_diff_to_parquet(df, report_file, table_name, id_cols)
+                    self.logEmitted.emit("SUCCESS", f"[{table_name}] Saved Parquet report → {os.path.basename(report_file)}")
+                else:
+                    report_file = os.path.join(output_dir, f"{clean_name}_diff_{run_ts}.xlsx")
+                    export_diff_to_excel(df, report_file, table_name, id_cols)
+                    self.logEmitted.emit("SUCCESS", f"[{table_name}] Saved Excel report → {os.path.basename(report_file)}")
 
                 self.tableStatusUpdated.emit(table_name, "Completed", diff_count)
-                self.tableFinished.emit(table_name, sql_file, xlsx_file)
+                self.tableFinished.emit(table_name, sql_file, report_file)
                 success_count += 1
                 cursor.close()
 
@@ -430,6 +457,7 @@ class TrinoDiffWorker(QObject):
                 error_msg = str(ex)
                 self.logEmitted.emit("ERROR", f"[{table_name}] Error: {error_msg}")
                 self.tableStatusUpdated.emit(table_name, "Error", 0)
+                self.tableErrorOccurred.emit(table_name, error_msg, query)
                 error_count += 1
 
         try:

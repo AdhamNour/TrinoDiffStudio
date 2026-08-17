@@ -10,6 +10,8 @@ Item {
 
     property string testResult: ""
     property bool   isTesting:  false
+    property string ollamaTestResult: ""
+    property bool   isTestingOllama:  false
 
     FolderDialog {
         id: folderDialog
@@ -22,6 +24,14 @@ Item {
             if (/^\/[A-Za-z]:\//.test(raw))
                 raw = raw.substring(1)
             outputDirField.text = raw
+        }
+    }
+
+    Connections {
+        target: backend
+        function onOllamaTestFinished(ok, msg) {
+            root.isTestingOllama = false
+            root.ollamaTestResult = ok ? "SUCCESS" : msg
         }
     }
 
@@ -306,6 +316,94 @@ Item {
                 }
             }
 
+            // ── Ollama AI Assistant card ─────────────────────────────────
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: ollamaColumn.implicitHeight + Theme.spacingLg * 2
+                color: Theme.bgCard
+                radius: Theme.radiusMd
+                border.color: Theme.border
+                border.width: 1
+
+                Column {
+                    id: ollamaColumn
+                    anchors {
+                        top: parent.top; left: parent.left; right: parent.right
+                        margins: Theme.spacingLg
+                    }
+                    spacing: Theme.spacingMd
+
+                    Column {
+                        spacing: 2
+                        Text {
+                            text: "🤖 Ollama / Qwen 2.5 Coder AI Configuration"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeMd
+                            font.weight: Font.DemiBold
+                            color: Theme.textPrimary
+                        }
+                        Text {
+                            text: "Local LLM endpoint used to diagnose cross-database Trino errors and suggest SQL fixes."
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                            color: Theme.textMuted
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppTextField {
+                            id: ollamaUrlField
+                            Layout.fillWidth: true
+                            label: "Ollama API URL"
+                            text: backend.config.ollama_url || "http://localhost:11434"
+                            placeholderText: "http://localhost:11434"
+                        }
+
+                        AppTextField {
+                            id: ollamaModelField
+                            Layout.preferredWidth: 220
+                            label: "Ollama Model"
+                            text: backend.config.ollama_model || "qwen2.5-coder:1.5b"
+                            placeholderText: "qwen2.5-coder:1.5b"
+                        }
+                    }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppButton {
+                            text: root.isTestingOllama ? "Testing…" : "⚡ Test Ollama Connection"
+                            variant: "primary"
+                            implicitHeight: 36
+                            enabled: !root.isTestingOllama
+                            onClicked: {
+                                root.isTestingOllama = true
+                                root.ollamaTestResult = ""
+                                backend.testOllamaConnectionAsync(ollamaUrlField.text, ollamaModelField.text)
+                            }
+                        }
+
+                        Text {
+                            visible: root.ollamaTestResult !== ""
+                            text: root.ollamaTestResult === "SUCCESS" ? "✓ Ollama & Model Available" : root.ollamaTestResult
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                            color: root.ollamaTestResult === "SUCCESS" ? Theme.accentEmerald : Theme.accentRose
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                }
+            }
+
             // ── Save row ─────────────────────────────────────────────────
             RowLayout {
                 Layout.fillWidth: true
@@ -331,7 +429,9 @@ Item {
                             excludeSuffixField.text,
                             trimStringsCheck.checked,
                             notifyTableCheck.checked,
-                            notifyBatchCheck.checked
+                            notifyBatchCheck.checked,
+                            ollamaUrlField.text,
+                            ollamaModelField.text
                         )
                     }
                 }

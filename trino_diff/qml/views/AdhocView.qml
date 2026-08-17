@@ -168,6 +168,16 @@ Item {
                         Item { Layout.fillWidth: true }
 
                         AppButton {
+                            text: "🤖 AI Fix"
+                            variant: "danger"
+                            implicitHeight: 36
+                            visible: tableNameField.text.trim() !== "" && backend.getTableErrorMessage(tableNameField.text.trim()) !== ""
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Diagnose Trino failure and generate fixed SQL with Qwen 2.5 Coder"
+                            onClicked: backend.explainTableError(tableNameField.text.trim())
+                        }
+
+                        AppButton {
                             text: "🔍  Preview SQL"
                             variant: "secondary"
                             implicitHeight: 36

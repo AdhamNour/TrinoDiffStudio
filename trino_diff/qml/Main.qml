@@ -27,6 +27,9 @@ ApplicationWindow {
     // SQL Viewer Dialog (modal)
     SqlViewerDialog { id: sqlViewerDialog }
 
+    // AI Error Diagnosis & SQL Fix Dialog (modal)
+    AiDiagnosisDialog { id: aiDiagnosisDialog }
+
     // Backend signal connections
     Connections {
         target: backend
@@ -39,6 +42,36 @@ ApplicationWindow {
 
         function onNotificationEmitted(type, message) {
             window.showToast(type, message)
+        }
+
+        function onAiDiagnosisLoading(tableName, isLoading) {
+            aiDiagnosisDialog.tableName = tableName
+            aiDiagnosisDialog.errorMessage = backend.getTableErrorMessage(tableName)
+            aiDiagnosisDialog.failedQuery = backend.getTableFailedQuery(tableName)
+            aiDiagnosisDialog.isLoading = isLoading
+            if (isLoading) {
+                aiDiagnosisDialog.explanationText = ""
+                aiDiagnosisDialog.suggestedSql = ""
+                aiDiagnosisDialog.open()
+            }
+        }
+
+        function onAiDiagnosisReady(tableName, explanation, suggestedSql) {
+            aiDiagnosisDialog.tableName = tableName
+            aiDiagnosisDialog.errorMessage = backend.getTableErrorMessage(tableName)
+            aiDiagnosisDialog.failedQuery = backend.getTableFailedQuery(tableName)
+            aiDiagnosisDialog.explanationText = explanation
+            aiDiagnosisDialog.suggestedSql = suggestedSql
+            aiDiagnosisDialog.isLoading = false
+            aiDiagnosisDialog.activeTab = "diagnosis"
+            aiDiagnosisDialog.open()
+        }
+
+        function onAiDiagnosisFailed(tableName, errorMsg) {
+            aiDiagnosisDialog.tableName = tableName
+            aiDiagnosisDialog.explanationText = "AI Diagnosis Error: " + errorMsg
+            aiDiagnosisDialog.isLoading = false
+            aiDiagnosisDialog.open()
         }
     }
 

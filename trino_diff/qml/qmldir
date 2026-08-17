@@ -6,6 +6,7 @@ AppComboBox components/AppComboBox.qml
 StatusBadge components/StatusBadge.qml
 LogViewer components/LogViewer.qml
 SqlViewerDialog components/SqlViewerDialog.qml
+AiDiagnosisDialog components/AiDiagnosisDialog.qml
 BatchView views/BatchView.qml
 AdhocView views/AdhocView.qml
 OutputView views/OutputView.qml

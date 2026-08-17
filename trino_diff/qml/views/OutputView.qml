@@ -93,6 +93,12 @@ Item {
                     onClicked: root.typeFilter = "Excel"
                 }
                 AppButton {
+                    text: "Parquet (.parquet)"
+                    variant: root.typeFilter === "Parquet" ? "primary" : "ghost"
+                    implicitHeight: 32
+                    onClicked: root.typeFilter = "Parquet"
+                }
+                AppButton {
                     text: "SQL Queries (.sql)"
                     variant: root.typeFilter === "SQL" ? "primary" : "ghost"
                     implicitHeight: 32
@@ -150,13 +156,16 @@ Item {
                                 implicitWidth: 34
                                 implicitHeight: 34
                                 radius: Theme.radiusSm
-                                color: modelData.type === "Excel" ? "#064E3B" : "#1E3A8A"
-                                border.color: modelData.type === "Excel" ? "#059669" : "#3B82F6"
+                                color: modelData.type === "Excel" ? "#064E3B"
+                                     : (modelData.type === "Parquet" ? "#3B0764" : "#1E3A8A")
+                                border.color: modelData.type === "Excel" ? "#059669"
+                                            : (modelData.type === "Parquet" ? "#9333EA" : "#3B82F6")
                                 border.width: 1
 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: modelData.type === "Excel" ? "📊" : "⚡"
+                                    text: modelData.type === "Excel" ? "📊"
+                                        : (modelData.type === "Parquet" ? "📦" : "⚡")
                                     font.pixelSize: 14
                                 }
                             }
@@ -185,7 +194,8 @@ Item {
 
                             // Actions
                             AppButton {
-                                text: modelData.type === "Excel" ? "Open Excel" : "View / Open"
+                                text: modelData.type === "Excel" ? "Open Excel"
+                                    : (modelData.type === "Parquet" ? "Open Parquet" : "Edit / Open")
                                 variant: "secondary"
                                 implicitHeight: 30
                                 onClicked: backend.openFile(modelData.path)

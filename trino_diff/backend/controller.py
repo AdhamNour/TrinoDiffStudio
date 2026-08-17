@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import threading
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread
 
@@ -13,6 +14,7 @@ from trino_diff.backend.trino_client import test_trino_connection, fetch_trino_c
 from trino_diff.backend.excel_loader import load_tables_from_excel
 from trino_diff.backend.worker import TrinoDiffWorker
 from trino_diff.backend.notifier import WindowsNotifier
+from trino_diff.backend.ollama_client import query_ollama, extract_sql_from_response, test_ollama_connection
 import generate_trino_diff
 
 
@@ -32,6 +34,10 @@ class BackendController(QObject):
     statusTextChanged = Signal()
     sqlPreviewReady = Signal(str, str)  # (table_name, sql_text)
     notificationEmitted = Signal(str, str)  # (type: 'success'|'error'|'info'|'warning', message)
+    aiDiagnosisReady = Signal(str, str, str)  # (table_name, explanation_markdown, suggested_sql)
+    aiDiagnosisFailed = Signal(str, str)      # (table_name, error_message)
+    aiDiagnosisLoading = Signal(str, bool)    # (table_name, is_loading)
+    ollamaTestFinished = Signal(bool, str)    # (success, message)
 
     def __init__(self):
         super().__init__()
@@ -41,12 +47,15 @@ class BackendController(QObject):
         self._tables = []
         self._logs = []
         self._output_files = []
+        self._table_errors = {}
         self._is_running = False
         self._progress_val = 0
         self._progress_max = 100
         self._status_text = "Ready"
         self._worker_thread = None
         self._worker = None
+        self._ai_thread = None
+        self._ai_worker = None
 
         # Initial startup log
         self.appendLog("INFO", "Trino Diff Studio initialized. System ready.")
@@ -141,6 +150,7 @@ class BackendController(QObject):
         else:
             self.appendLog("ERROR", f"Trino connection failed: {msg}")
             self.notificationEmitted.emit("error", f"Connection failed: {msg}")
+            self._notifier.notify("Trino Connection Failed", f"Could not connect to Trino: {msg}", level="error")
             return f"ERROR: {msg}"
 
     @Slot()
@@ -184,6 +194,7 @@ class BackendController(QObject):
         else:
             self.appendLog("ERROR", msg)
             self.notificationEmitted.emit("error", msg)
+            self._notifier.notify("Excel Load Failed", f"Could not load Excel mapping: {msg}", level="error")
 
     @Slot(str, bool)
     def toggleTableSelection(self, table_name: str, selected: bool):
@@ -234,6 +245,7 @@ class BackendController(QObject):
         self._worker.progressUpdated.connect(self._onWorkerProgress)
         self._worker.tableStatusUpdated.connect(self._onWorkerTableStatus)
         self._worker.tableFinished.connect(self._onWorkerTableFinished)
+        self._worker.tableErrorOccurred.connect(self._onWorkerTableError)
         self._worker.allFinished.connect(self._onWorkerAllFinished)
 
         self._worker_thread.started.connect(self._worker.run)
@@ -282,6 +294,7 @@ class BackendController(QObject):
         self._worker.progressUpdated.connect(self._onWorkerProgress)
         self._worker.tableStatusUpdated.connect(self._onWorkerTableStatus)
         self._worker.tableFinished.connect(self._onWorkerTableFinished)
+        self._worker.tableErrorOccurred.connect(self._onWorkerTableError)
         self._worker.allFinished.connect(self._onWorkerAllFinished)
 
         self._worker_thread.started.connect(self._worker.run)
@@ -305,6 +318,19 @@ class BackendController(QObject):
         self.progressChanged.emit()
         self.statusTextChanged.emit()
 
+    def _onWorkerTableError(self, table_name: str, error_msg: str, query: str):
+        self._table_errors[table_name] = {
+            "error": error_msg,
+            "query": query,
+            "timestamp": datetime.now().strftime("%H:%M:%S")
+        }
+        for t in self._tables:
+            if t["table_name"] == table_name:
+                t["error_message"] = error_msg
+                t["failed_query"] = query
+                break
+        self.tablesChanged.emit()
+
     def _onWorkerTableStatus(self, table_name: str, status: str, diff_count: int):
         for t in self._tables:
             if t["table_name"] == table_name:
@@ -315,14 +341,14 @@ class BackendController(QObject):
                 break
         self.tablesChanged.emit()
 
-        # Windows Notification for individual table completion
+        # Windows Notification for individual table completion or failure
         if self._config.get("notify_table_complete", True):
             if status == "Completed":
                 if diff_count == 0:
                     msg = "0 diffs found (datasets are fully in sync)."
                     level = "success"
                 else:
-                    msg = f"Completed with {diff_count} diff row(s). Excel report generated."
+                    msg = f"Completed with {diff_count:,} diff row(s). Report generated."
                     level = "warning"
                 self._notifier.notify(f"Diff Complete: {table_name}", msg, level=level)
             elif status == "Error":
@@ -364,9 +390,9 @@ class BackendController(QObject):
                 )
             else:
                 self._notifier.notify(
-                    "Trino Batch Completed (with errors)",
+                    "Trino Batch Alert: Failures Detected",
                     f"Processed {total} table(s): {success_cnt} succeeded, {error_cnt} failed.",
-                    level="warning"
+                    level="error"
                 )
 
     # -----------------------------------------------------------------------
@@ -440,6 +466,7 @@ class BackendController(QObject):
         except Exception as e:
             self.appendLog("ERROR", f"SQL preview error: {e}")
             self.notificationEmitted.emit("error", f"Could not generate SQL preview: {e}")
+            self._notifier.notify("SQL Preview Failed", f"Could not generate SQL preview for {clean_table}: {e}", level="error")
 
     # -----------------------------------------------------------------------
     # Output Files Management
@@ -454,15 +481,21 @@ class BackendController(QObject):
                 fp = os.path.join(output_dir, fn)
                 if os.path.isfile(fp):
                     ext = os.path.splitext(fn)[1].lower()
-                    if ext in (".xlsx", ".sql"):
+                    if ext in (".xlsx", ".sql", ".parquet"):
                         st = os.stat(fp)
                         size_kb = round(st.st_size / 1024, 1)
                         mod_time = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                        if ext == ".xlsx":
+                            ftype = "Excel"
+                        elif ext == ".parquet":
+                            ftype = "Parquet"
+                        else:
+                            ftype = "SQL"
                         files.append({
                             "name": fn,
                             "path": fp,
-                            "type": "Excel" if ext == ".xlsx" else "SQL",
-                            "size": f"{size_kb} KB",
+                            "type": ftype,
+                            "size": f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 1)} MB",
                             "modified": mod_time,
                         })
         self._output_files = files
@@ -472,16 +505,42 @@ class BackendController(QObject):
     def openFile(self, path: str):
         if not os.path.exists(path):
             self.notificationEmitted.emit("error", f"File not found: {path}")
+            self._notifier.notify("File Not Found", f"Could not find file: {path}", level="error")
             return
         try:
+            ext = os.path.splitext(path)[1].lower()
             if sys.platform == "win32":
-                os.startfile(path)
+                if ext == ".sql":
+                    # Prefer Notepad++, fallback to standard Notepad
+                    import shutil
+                    npp_candidates = [
+                        os.path.join(os.environ.get("ProgramFiles", "C:\\Program Files"), "Notepad++", "notepad++.exe"),
+                        os.path.join(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"), "Notepad++", "notepad++.exe"),
+                        os.path.expandvars("%LOCALAPPDATA%\\Programs\\Notepad++\\notepad++.exe"),
+                    ]
+                    npp_path = None
+                    which_npp = shutil.which("notepad++.exe") or shutil.which("notepad++")
+                    if which_npp and os.path.exists(which_npp):
+                        npp_path = which_npp
+                    else:
+                        for cand in npp_candidates:
+                            if os.path.exists(cand):
+                                npp_path = cand
+                                break
+
+                    if npp_path:
+                        subprocess.Popen([npp_path, path])
+                    else:
+                        subprocess.Popen(["notepad.exe", path])
+                else:
+                    os.startfile(path)
             elif sys.platform == "darwin":
                 subprocess.run(["open", path])
             else:
                 subprocess.run(["xdg-open", path])
         except Exception as e:
             self.notificationEmitted.emit("error", f"Could not open file: {e}")
+            self._notifier.notify("Open File Failed", f"Could not open {os.path.basename(path)}: {e}", level="error")
 
     @Slot(str)
     def openFolder(self, path: str):
@@ -509,10 +568,130 @@ class BackendController(QObject):
                 self.notificationEmitted.emit("error", f"Could not delete file: {e}")
 
     # -----------------------------------------------------------------------
+    # AI Diagnosis (Qwen 2.5 Coder via Ollama)
+    # -----------------------------------------------------------------------
+
+    @Slot(str)
+    def explainTableError(self, table_name: str):
+        clean_name = table_name.strip()
+        err_info = self._table_errors.get(clean_name, {})
+        error_msg = err_info.get("error", "")
+        failed_query = err_info.get("query", "")
+
+        if not error_msg:
+            for t in self._tables:
+                if t["table_name"] == clean_name:
+                    error_msg = t.get("error_message", "")
+                    failed_query = t.get("failed_query", "")
+                    break
+
+        if not error_msg:
+            error_msg = "Unknown error occurred during Trino execution."
+
+        # Notify UI immediately to open dialog and show animated spinner
+        self.aiDiagnosisLoading.emit(clean_name, True)
+        self.appendLog("INFO", f"[AI Assistant] Asking Qwen 2.5-Coder to analyze Trino error for {clean_name}...")
+
+        config_copy = self._config.copy()
+
+        def _ai_task():
+            try:
+                ollama_url = config_copy.get("ollama_url", "http://localhost:11434")
+                model = config_copy.get("ollama_model", "qwen2.5-coder:1.5b")
+
+                prompt = f"""You are an expert Trino SQL engineer and database administrator.
+A Trino cross-database comparison query between Oracle and PostgreSQL failed with an error.
+
+TABLE NAME: {clean_name}
+
+TRINO ERROR:
+{error_msg}
+
+FAILED TRINO SQL QUERY:
+{failed_query if failed_query else "(Query could not be generated due to metadata error)"}
+
+Please provide an in-depth analysis and concrete fix:
+1. Explain clearly why this Trino error occurred (e.g. data type mismatch like VARCHAR vs TIMESTAMP, improper CAST, missing column, NULL comparison, date syntax, catalog qualification, or reserved keyword).
+2. Detail how to fix it in Trino SQL.
+3. Provide the full corrected Trino SQL query enclosed in a ```sql ... ``` code block.
+"""
+                print(f"\n--- [PROMPT PASSED TO QWEN ({model})] ---\n{prompt}\n----------------------------------------\n")
+                self.appendLog("INFO", f"[AI Prompt sent to Qwen ({model}) for {clean_name}]")
+
+                # Native OS thread releases Python GIL during socket I/O
+                res = query_ollama(prompt, model=model, base_url=ollama_url, timeout=90)
+                if res["success"]:
+                    explanation = res["response"]
+                    suggested_sql = extract_sql_from_response(explanation)
+                    self._onAiDiagnosisFinished(clean_name, explanation, suggested_sql)
+                else:
+                    self._onAiDiagnosisFailed(clean_name, res["error"])
+            except Exception as ex:
+                self._onAiDiagnosisFailed(clean_name, f"Unexpected error during AI diagnosis: {ex}")
+
+        # Start native background OS thread
+        worker_thread = threading.Thread(target=_ai_task, daemon=True)
+        worker_thread.start()
+
+    def _onAiDiagnosisFinished(self, table_name: str, explanation: str, suggested_sql: str):
+        self.aiDiagnosisLoading.emit(table_name, False)
+        self.aiDiagnosisReady.emit(table_name, explanation, suggested_sql)
+        self.appendLog("SUCCESS", f"[AI Assistant] Diagnosis & suggested fix generated for {table_name}.")
+
+    def _onAiDiagnosisFailed(self, table_name: str, error_msg: str):
+        self.aiDiagnosisLoading.emit(table_name, False)
+        self.aiDiagnosisFailed.emit(table_name, error_msg)
+        self.appendLog("ERROR", f"[AI Assistant] Diagnosis failed for {table_name}: {error_msg}")
+        self.notificationEmitted.emit("error", f"AI Diagnosis failed: {error_msg}")
+
+    @Slot(str, result=str)
+    def getTableErrorMessage(self, table_name: str) -> str:
+        clean_name = table_name.strip()
+        if clean_name in self._table_errors:
+            return self._table_errors[clean_name].get("error", "")
+        for t in self._tables:
+            if t["table_name"] == clean_name:
+                return t.get("error_message", "")
+        return ""
+
+    @Slot(str, result=str)
+    def getTableFailedQuery(self, table_name: str) -> str:
+        clean_name = table_name.strip()
+        if clean_name in self._table_errors:
+            return self._table_errors[clean_name].get("query", "")
+        for t in self._tables:
+            if t["table_name"] == clean_name:
+                return t.get("failed_query", "")
+        return ""
+
+    @Slot(str, str)
+    def testOllamaConnectionAsync(self, base_url: str, model: str):
+        url = base_url.strip() or self._config.get("ollama_url", "http://localhost:11434")
+        mdl = model.strip() or self._config.get("ollama_model", "qwen2.5-coder:1.5b")
+        self.appendLog("INFO", f"[Ollama] Testing connection to {url} ({mdl})...")
+
+        def _test_task():
+            ok, msg = test_ollama_connection(url, mdl)
+            if ok:
+                self.appendLog("SUCCESS", f"[Ollama] {msg}")
+                self.notificationEmitted.emit("success", msg)
+            else:
+                self.appendLog("ERROR", f"[Ollama] {msg}")
+                self.notificationEmitted.emit("error", msg)
+            self.ollamaTestFinished.emit(ok, msg)
+
+        threading.Thread(target=_test_task, daemon=True).start()
+
+    @Slot(str, str, result=str)
+    def testOllamaConnection(self, base_url: str, model: str) -> str:
+        self.testOllamaConnectionAsync(base_url, model)
+        return "Testing..."
+
+    # -----------------------------------------------------------------------
     # Settings
     # -----------------------------------------------------------------------
 
-    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool)
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str)
     def updateSettings(
         self,
         host: str,
@@ -526,7 +705,9 @@ class BackendController(QObject):
         exclude_suf: str,
         trim_strings: bool,
         notify_table: bool = True,
-        notify_batch: bool = True
+        notify_batch: bool = True,
+        ollama_url: str = "http://localhost:11434",
+        ollama_model: str = "qwen2.5-coder:1.5b"
     ):
         self._config["trino_host"] = host.strip()
         self._config["trino_port"] = port
@@ -540,6 +721,8 @@ class BackendController(QObject):
         self._config["trim_strings"] = trim_strings
         self._config["notify_table_complete"] = bool(notify_table)
         self._config["notify_batch_complete"] = bool(notify_batch)
+        self._config["ollama_url"] = ollama_url.strip() or "http://localhost:11434"
+        self._config["ollama_model"] = ollama_model.strip() or "qwen2.5-coder:1.5b"
 
         save_config(self._config)
         self.configChanged.emit()

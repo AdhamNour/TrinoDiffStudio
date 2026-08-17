@@ -1,0 +1,14 @@
+{
+    "trino_host": "localhost",
+    "trino_port": 8080,
+    "trino_user": "admin",
+    "http_scheme": "http",
+    "source_catalog": "postgres",
+    "target_catalog": "oracle",
+    "default_schemas": "curated, rdm",
+    "output_dir": "C:\\Users\\anhassan\\nera_automations\\output",
+    "excel_path": "C:\\Users\\anhassan\\nera_automations\\Oracle_to_Postgre_Business_Columns 2.xlsx",
+    "exclude_columns": "extraction_timestamp",
+    "exclude_suffix": "key",
+    "trim_strings": true
+}

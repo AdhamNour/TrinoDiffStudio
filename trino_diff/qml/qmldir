@@ -1,0 +1,13 @@
+singleton Theme Theme.qml
+AppButton components/AppButton.qml
+AppCard components/AppCard.qml
+AppTextField components/AppTextField.qml
+AppComboBox components/AppComboBox.qml
+StatusBadge components/StatusBadge.qml
+LogViewer components/LogViewer.qml
+SqlViewerDialog components/SqlViewerDialog.qml
+BatchView views/BatchView.qml
+AdhocView views/AdhocView.qml
+OutputView views/OutputView.qml
+LogsView views/LogsView.qml
+SettingsView views/SettingsView.qml

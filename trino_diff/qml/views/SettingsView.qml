@@ -1,0 +1,309 @@
+import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
+import QtQuick.Dialogs
+import ".."
+import "../components"
+
+Item {
+    id: root
+
+    property string testResult: ""
+    property bool   isTesting:  false
+
+    FolderDialog {
+        id: folderDialog
+        title: "Select Output Directory"
+        onAccepted: {
+            var raw = folderDialog.selectedFolder.toString()
+            // Strip file:/// prefix; on Windows the path will look like /C:/Users/...
+            raw = raw.replace(/^file:\/\/\//, "").replace(/^file:\/\//, "")
+            // Remove leading slash before drive letter on Windows: /C:/ → C:/
+            if (/^\/[A-Za-z]:\//.test(raw))
+                raw = raw.substring(1)
+            outputDirField.text = raw
+        }
+    }
+
+    ScrollView {
+        anchors.fill: parent
+        anchors.margins: Theme.spacingLg
+        clip: true
+
+        ColumnLayout {
+            width: root.width - Theme.spacingLg * 2
+            spacing: Theme.spacingLg
+
+            // ── Header ──────────────────────────────────────────────────
+            Column {
+                spacing: 4
+                Text {
+                    text: "Connection & Application Settings"
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeLg
+                    font.weight: Font.Bold
+                    color: Theme.textPrimary
+                }
+                Text {
+                    text: "Configure Trino endpoint, default catalogs, column exclusions, and output folder."
+                    font.family: Theme.fontFamily
+                    font.pixelSize: Theme.fontSizeSm
+                    color: Theme.textSecondary
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            // ── Trino Connection card ────────────────────────────────────
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: connColumn.implicitHeight + Theme.spacingLg * 2
+                color: Theme.bgCard
+                radius: Theme.radiusMd
+                border.color: Theme.border
+                border.width: 1
+
+                Column {
+                    id: connColumn
+                    anchors {
+                        top: parent.top; left: parent.left; right: parent.right
+                        margins: Theme.spacingLg
+                    }
+                    spacing: Theme.spacingMd
+
+                    Column {
+                        spacing: 2
+                        Text {
+                            text: "Trino Server Connection"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeMd
+                            font.weight: Font.DemiBold
+                            color: Theme.textPrimary
+                        }
+                        Text {
+                            text: "Endpoint credentials and network configuration for the Trino REST API."
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                            color: Theme.textMuted
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppTextField {
+                            id: hostField
+                            Layout.fillWidth: true
+                            label: "Host"
+                            text: backend.config.trino_host || "localhost"
+                        }
+
+                        AppTextField {
+                            id: portField
+                            Layout.preferredWidth: 130
+                            label: "Port"
+                            text: String(backend.config.trino_port || 8080)
+                        }
+
+                        AppTextField {
+                            id: userField
+                            Layout.preferredWidth: 150
+                            label: "User"
+                            text: backend.config.trino_user || "admin"
+                        }
+
+                        AppComboBox {
+                            id: schemeCombo
+                            Layout.preferredWidth: 110
+                            label: "Scheme"
+                            model: ["http", "https"]
+                            currentIndex: backend.config.http_scheme === "https" ? 1 : 0
+                        }
+                    }
+
+                    // Test Connection row
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppButton {
+                            text: root.isTesting ? "Testing…" : "⚡  Test Connection & Fetch Catalogs"
+                            variant: "primary"
+                            implicitHeight: 36
+                            enabled: !root.isTesting
+                            onClicked: {
+                                root.isTesting  = true
+                                root.testResult = backend.testConnection()
+                                root.isTesting  = false
+                            }
+                        }
+
+                        Text {
+                            visible: root.testResult !== ""
+                            text: root.testResult === "SUCCESS" ? "✓  Connection OK" : root.testResult
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                            color: root.testResult === "SUCCESS" ? Theme.accentEmerald : Theme.accentRose
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+                    Text {
+                        text: "Available catalogs: " + backend.catalogs.join(", ")
+                        font.family: Theme.monoFontFamily
+                        font.pixelSize: Theme.fontSizeXs
+                        color: Theme.accentCyan
+                    }
+                }
+            }
+
+            // ── Default Diff Parameters card ─────────────────────────────
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: defaultsColumn.implicitHeight + Theme.spacingLg * 2
+                color: Theme.bgCard
+                radius: Theme.radiusMd
+                border.color: Theme.border
+                border.width: 1
+
+                Column {
+                    id: defaultsColumn
+                    anchors {
+                        top: parent.top; left: parent.left; right: parent.right
+                        margins: Theme.spacingLg
+                    }
+                    spacing: Theme.spacingMd
+
+                    Column {
+                        spacing: 2
+                        Text {
+                            text: "Default Diff Parameters"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeMd
+                            font.weight: Font.DemiBold
+                            color: Theme.textPrimary
+                        }
+                        Text {
+                            text: "Default catalogs, column exclusions, and output folder for batch and ad-hoc runs."
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                            color: Theme.textMuted
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppComboBox {
+                            id: defaultSourceCatCombo
+                            Layout.fillWidth: true
+                            label: "Default Source Catalog"
+                            model: backend.catalogs
+                            currentIndex: Math.max(0, backend.catalogs.indexOf(backend.config.source_catalog || "postgres"))
+                        }
+
+                        AppComboBox {
+                            id: defaultTargetCatCombo
+                            Layout.fillWidth: true
+                            label: "Default Target Catalog"
+                            model: backend.catalogs
+                            currentIndex: {
+                                var idx = backend.catalogs.indexOf(backend.config.target_catalog || "oracle")
+                                return idx >= 0 ? idx : (backend.catalogs.length > 1 ? 1 : 0)
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppTextField {
+                            id: excludeColsField
+                            Layout.fillWidth: true
+                            label: "Excluded Columns (comma-separated)"
+                            text: backend.config.exclude_columns || "extraction_timestamp"
+                        }
+
+                        AppTextField {
+                            id: excludeSuffixField
+                            Layout.preferredWidth: 190
+                            label: "Excluded Column Suffix"
+                            text: backend.config.exclude_suffix || "key"
+                        }
+                    }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppTextField {
+                            id: outputDirField
+                            Layout.fillWidth: true
+                            label: "Output Directory"
+                            text: backend.config.output_dir || "output"
+                        }
+
+                        AppButton {
+                            text: "Browse…"
+                            variant: "secondary"
+                            implicitHeight: 38
+                            Layout.alignment: Qt.AlignBottom
+                            onClicked: folderDialog.open()
+                        }
+                    }
+
+                    CheckBox {
+                        id: trimStringsCheck
+                        checked: backend.config.trim_strings !== false
+                        text: "Trim strings (removes trailing whitespace from Oracle CHAR columns)"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSm
+                    }
+                }
+            }
+
+            // ── Save row ─────────────────────────────────────────────────
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spacingMd
+
+                Item { Layout.fillWidth: true }
+
+                AppButton {
+                    text: "💾  Save Configuration"
+                    variant: "success"
+                    implicitHeight: 40
+                    customPaddingH: 24
+                    onClicked: {
+                        backend.updateSettings(
+                            hostField.text,
+                            parseInt(portField.text) || 8080,
+                            userField.text,
+                            schemeCombo.currentText,
+                            defaultSourceCatCombo.currentText,
+                            defaultTargetCatCombo.currentText,
+                            outputDirField.text,
+                            excludeColsField.text,
+                            excludeSuffixField.text,
+                            trimStringsCheck.checked
+                        )
+                    }
+                }
+            }
+
+            Item { height: Theme.spacingLg }
+        }
+    }
+}

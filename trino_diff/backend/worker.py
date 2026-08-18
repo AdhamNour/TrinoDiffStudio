@@ -84,9 +84,16 @@ def _style_data_rows(ws, df: pd.DataFrame):
 
 def _auto_column_widths(ws, df: pd.DataFrame, max_width: int = 60, min_width: int = 12):
     from openpyxl.utils import get_column_letter
+    if df.empty or len(df.columns) == 0:
+        return
     for col_idx, col_name in enumerate(df.columns, start=1):
         header_len = len(str(col_name))
-        max_data_len = int(df[col_name].astype(str).str.len().max()) if len(df) > 0 else 0
+        try:
+            lens = df[col_name].dropna().astype(str).str.len()
+            max_val = lens.max() if len(lens) > 0 else 0
+            max_data_len = int(max_val) if pd.notna(max_val) else 0
+        except Exception:
+            max_data_len = 0
         width = min(max(header_len, max_data_len, min_width) + 4, max_width)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
@@ -113,6 +120,15 @@ def _add_diff_legend(ws, start_row: int):
         label_cell.font = Font(name="Calibri", size=10)
         label_cell.alignment = Alignment(horizontal="center")
         ws.cell(row=i, column=2, value=desc).font = Font(name="Calibri", size=10, italic=True)
+
+
+def _safe_int(val, default: int = 0) -> int:
+    try:
+        if pd.isna(val):
+            return default
+        return int(val)
+    except Exception:
+        return default
 
 
 def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame, id_cols: list, run_ts: str):
@@ -145,9 +161,9 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame, id_cols: list, r
     ws.append(["", "", ""])
 
     total    = len(df)
-    mismatch = int((df["row_diff_type"] == "VALUE_MISMATCH").sum()) if "row_diff_type" in df.columns else 0
-    only_src = int((df["row_diff_type"].isin(["ONLY_IN_SOURCE", "ONLY_IN_POSTGRES"])).sum()) if "row_diff_type" in df.columns else 0
-    only_tgt = int((df["row_diff_type"].isin(["ONLY_IN_TARGET", "ONLY_IN_ORACLE"])).sum()) if "row_diff_type" in df.columns else 0
+    mismatch = _safe_int((df["row_diff_type"] == "VALUE_MISMATCH").sum()) if "row_diff_type" in df.columns else 0
+    only_src = _safe_int((df["row_diff_type"].isin(["ONLY_IN_SOURCE", "ONLY_IN_POSTGRES"])).sum()) if "row_diff_type" in df.columns else 0
+    only_tgt = _safe_int((df["row_diff_type"].isin(["ONLY_IN_TARGET", "ONLY_IN_ORACLE"])).sum()) if "row_diff_type" in df.columns else 0
 
     ws.append(["Overall Summary", "", ""])
     r = ws.max_row
@@ -192,26 +208,30 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame, id_cols: list, r
             cell.alignment = Alignment(horizontal="center")
             cell.border    = border
 
-        col_counts = (
-            df[df["row_diff_type"] == "VALUE_MISMATCH"]["column_name"]
-            .value_counts()
-            .reset_index()
-        )
-        col_counts.columns = ["column_name", "count"]
+        mismatch_df = df[df["row_diff_type"] == "VALUE_MISMATCH"]
+        if not mismatch_df.empty:
+            col_counts = (
+                mismatch_df["column_name"]
+                .dropna()
+                .value_counts()
+                .reset_index()
+            )
+            col_counts.columns = ["column_name", "count"]
 
-        for i, row in col_counts.iterrows():
-            pct = round(row["count"] / total * 100, 1) if total else 0
-            fill = ALT_FILL if i % 2 == 0 else WHITE_FILL
-            ws.append([row["column_name"], int(row["count"]), f"{pct}%"])
-            r = ws.max_row
-            ws.cell(r, 1).font = Font(name="Calibri", size=10)
-            ws.cell(r, 2).font = Font(bold=True, name="Calibri", size=10)
-            ws.cell(r, 3).font = Font(name="Calibri", size=10)
-            ws.cell(r, 2).alignment = Alignment(horizontal="center")
-            ws.cell(r, 3).alignment = Alignment(horizontal="center")
-            for c in (1, 2, 3):
-                ws.cell(r, c).fill   = fill
-                ws.cell(r, c).border = border
+            for i, row in col_counts.iterrows():
+                cnt = _safe_int(row["count"])
+                pct = round(cnt / total * 100, 1) if total else 0
+                fill = ALT_FILL if i % 2 == 0 else WHITE_FILL
+                ws.append([str(row["column_name"]), cnt, f"{pct}%"])
+                r = ws.max_row
+                ws.cell(r, 1).font = Font(name="Calibri", size=10)
+                ws.cell(r, 2).font = Font(bold=True, name="Calibri", size=10)
+                ws.cell(r, 3).font = Font(name="Calibri", size=10)
+                ws.cell(r, 2).alignment = Alignment(horizontal="center")
+                ws.cell(r, 3).alignment = Alignment(horizontal="center")
+                for c in (1, 2, 3):
+                    ws.cell(r, c).fill   = fill
+                    ws.cell(r, c).border = border
 
     ws.append(["", "", ""])
     ws.append(["Composite Key Columns", "", ""])
@@ -240,6 +260,11 @@ def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame, 
         return
 
     display_cols = [c for c in id_cols if c in df_missing.columns]
+    if not display_cols:
+        ws.append([f"No {sheet_name} records found."])
+        ws.cell(1, 1).font = Font(italic=True, name="Calibri", size=10)
+        return
+
     _apply_header(ws, display_cols, header_fill_hex=fill_hex)
 
     row_fill = PatternFill("solid", fgColor="FCE4D6" if "TARGET" in sheet_name or "ORACLE" in sheet_name else "D9E1F2")

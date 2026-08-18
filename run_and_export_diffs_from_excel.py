@@ -177,9 +177,16 @@ def _auto_column_widths(ws, df: pd.DataFrame, max_width: int = 60, min_width: in
     """Set column widths based on max content length."""
     from openpyxl.utils import get_column_letter
 
+    if df.empty or len(df.columns) == 0:
+        return
     for col_idx, col_name in enumerate(df.columns, start=1):
         header_len = len(str(col_name))
-        max_data_len = int(df[col_name].astype(str).str.len().max()) if len(df) > 0 else 0
+        try:
+            lens = df[col_name].dropna().astype(str).str.len()
+            max_val = lens.max() if len(lens) > 0 else 0
+            max_data_len = int(max_val) if pd.notna(max_val) else 0
+        except Exception:
+            max_data_len = 0
         width = min(max(header_len, max_data_len, min_width) + 4, max_width)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 

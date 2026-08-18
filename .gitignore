@@ -2,3 +2,18 @@
 *.pdf
 *.zip
 *.log
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.sqlite
+*.db
+
+# Environment variables
+.env

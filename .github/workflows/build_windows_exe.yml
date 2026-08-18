@@ -1,0 +1,112 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publish a GitHub Release with the built executable'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Trino Diff Studio (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Windows Executable
+        run: |
+          python scripts/build_exe.py --clean
+
+      - name: Verify Executable Creation
+        shell: pwsh
+        run: |
+          if (-Not (Test-Path "dist/TrinoDiffStudio.exe")) {
+            Write-Error "TrinoDiffStudio.exe was not created in dist/"
+            exit 1
+          }
+          $exeSize = (Get-Item "dist/TrinoDiffStudio.exe").Length / 1MB
+          Write-Host ("Built TrinoDiffStudio.exe successfully ({0:N2} MB)" -f $exeSize)
+
+      - name: Package Release Archive & Compute Checksums
+        shell: pwsh
+        run: |
+          # Create packaging folder
+          $pkgDir = "dist/TrinoDiffStudio-Package"
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+          
+          # Copy Executable
+          Copy-Item "dist/TrinoDiffStudio.exe" -Destination "$pkgDir/"
+          
+          # Copy sample Excel mapping if present
+          if (Test-Path "Oracle_to_Postgre_Business_Columns 2.xlsx") {
+            Copy-Item "Oracle_to_Postgre_Business_Columns 2.xlsx" -Destination "$pkgDir/"
+          }
+          
+          # Create Zip Archive
+          $zipPath = "dist/TrinoDiffStudio-windows-x64.zip"
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath $zipPath -Force
+          
+          # Compute SHA-256 Checksums
+          $exeHash = Get-FileHash -Algorithm SHA256 "dist/TrinoDiffStudio.exe"
+          $zipHash = Get-FileHash -Algorithm SHA256 $zipPath
+          
+          $checksumContent = @"
+          SHA256 Checksums for Trino Diff Studio (Windows x64)
+          ====================================================
+          $($exeHash.Hash)  TrinoDiffStudio.exe
+          $($zipHash.Hash)  TrinoDiffStudio-windows-x64.zip
+          "@
+          
+          Set-Content -Path "dist/SHA256SUMS.txt" -Value $checksumContent
+          Get-Content "dist/SHA256SUMS.txt"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrinoDiffStudio-windows-x64
+          path: |
+            dist/TrinoDiffStudio.exe
+            dist/TrinoDiffStudio-windows-x64.zip
+            dist/SHA256SUMS.txt
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/TrinoDiffStudio-windows-x64.zip
+            dist/SHA256SUMS.txt
+          draft: false
+          prerelease: false
+          generate_release_notes: true

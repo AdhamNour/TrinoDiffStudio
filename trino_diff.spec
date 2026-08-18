@@ -1,0 +1,149 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""
+PyInstaller Specification File for Trino Diff Studio
+===================================================
+Packages the PySide6 + QML application into a standalone Windows executable.
+"""
+
+import os
+import sys
+from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
+
+block_cipher = None
+
+# Base directory of the repository
+BASE_DIR = os.path.abspath(SPECPATH)
+
+# Collect all PySide6 binaries, data (including QML plugins & components), and hidden imports
+pyside6_datas, pyside6_binaries, pyside6_hidden = collect_all('PySide6')
+
+# Collect SQLAlchemy models and dialects
+sqlalchemy_datas, sqlalchemy_binaries, sqlalchemy_hidden = collect_all('sqlalchemy')
+
+# Additional project datas
+datas = [
+    (os.path.join(BASE_DIR, 'trino_diff', 'qml'), os.path.join('trino_diff', 'qml')),
+    (os.path.join(BASE_DIR, 'trino_diff', 'resources'), os.path.join('trino_diff', 'resources')),
+    (os.path.join(BASE_DIR, 'trino_diff', 'backend', 'app_config.json'), os.path.join('trino_diff', 'backend')),
+    (os.path.join(BASE_DIR, 'generate_trino_diff.py'), '.'),
+]
+datas += pyside6_datas
+datas += sqlalchemy_datas
+
+# Binaries
+binaries = []
+binaries += pyside6_binaries
+binaries += sqlalchemy_binaries
+
+# Explicit hidden imports to prevent missing runtime modules
+hiddenimports = [
+    # Core PySide6 modules
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
+    'PySide6.QtQml',
+    'PySide6.QtQuick',
+    'PySide6.QtQuickControls2',
+    'PySide6.QtNetwork',
+    'PySide6.QtOpenGL',
+    'PySide6.QtSvg',
+    
+    # SQLAlchemy ORM & SQLite dialect
+    'sqlalchemy',
+    'sqlalchemy.orm',
+    'sqlalchemy.engine',
+    'sqlalchemy.dialects.sqlite',
+    'sqlalchemy.sql.default_comparator',
+    
+    # Data processing & database drivers
+    'trino',
+    'trino.auth',
+    'pandas',
+    'openpyxl',
+    'pyarrow',
+    'oracledb',
+    'psycopg2',
+    'dotenv',
+    'boto3',
+    
+    # Internal project modules
+    'trino_diff',
+    'trino_diff.app',
+    'trino_diff.splash',
+    'trino_diff.backend',
+    'trino_diff.backend.controller',
+    'trino_diff.backend.worker',
+    'trino_diff.backend.notifier',
+    'trino_diff.backend.db_manager',
+    'trino_diff.backend.db_models',
+    'trino_diff.backend.excel_loader',
+    'trino_diff.backend.ollama_client',
+    'trino_diff.backend.trino_client',
+    'trino_diff.backend.config_manager',
+    'generate_trino_diff',
+]
+hiddenimports += pyside6_hidden
+hiddenimports += sqlalchemy_hidden
+hiddenimports += collect_submodules('trino_diff')
+
+# Exclude unnecessary heavy packages to optimize executable size
+excludes = [
+    'tkinter',
+    'matplotlib',
+    'scipy',
+    'IPython',
+    'notebook',
+    'pytest',
+    'unittest',
+]
+
+a = Analysis(
+    [os.path.join(BASE_DIR, 'run_gui.py')],
+    pathex=[BASE_DIR],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=excludes,
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(
+    a.pure,
+    a.zipped_data,
+    cipher=block_cipher,
+)
+
+# Icon path
+icon_file = os.path.join(BASE_DIR, 'trino_diff', 'resources', 'app_icon.ico')
+if not os.path.exists(icon_file):
+    icon_file = None
+
+# Single-file standalone executable
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='TrinoDiffStudio',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,  # Windowed GUI application (no black terminal flash)
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=icon_file,
+)

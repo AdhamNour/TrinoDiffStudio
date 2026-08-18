@@ -1,5 +1,7 @@
 import json
 import os
+import sys
+
 try:
     from trino_diff.backend.db_manager import DatabaseManager
 except ImportError:
@@ -7,7 +9,21 @@ except ImportError:
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
-CONFIG_PATH = os.path.join(SCRIPT_DIR, "app_config.json")
+
+# Handle PyInstaller frozen environment vs local dev environment
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(sys.executable)
+    DOCS_DIR = os.path.join(os.path.expanduser("~"), "Documents", "TrinoDiffStudio")
+    DEFAULT_OUTPUT_DIR = os.path.join(DOCS_DIR, "output")
+    DEFAULT_EXCEL_PATH = os.path.join(APP_DIR, "Oracle_to_Postgre_Business_Columns 2.xlsx")
+    if not os.path.exists(DEFAULT_EXCEL_PATH):
+        DEFAULT_EXCEL_PATH = os.path.join(DOCS_DIR, "Oracle_to_Postgre_Business_Columns 2.xlsx")
+    CONFIG_PATH = os.path.join(DOCS_DIR, "app_config.json")
+else:
+    APP_DIR = PROJECT_ROOT
+    DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
+    DEFAULT_EXCEL_PATH = os.path.join(PROJECT_ROOT, "Oracle_to_Postgre_Business_Columns 2.xlsx")
+    CONFIG_PATH = os.path.join(SCRIPT_DIR, "app_config.json")
 
 DEFAULT_CONFIG = {
     "trino_host": "localhost",
@@ -17,8 +33,8 @@ DEFAULT_CONFIG = {
     "source_catalog": "postgres",
     "target_catalog": "oracle",
     "default_schemas": "curated, rdm",
-    "output_dir": os.path.join(PROJECT_ROOT, "output"),
-    "excel_path": os.path.join(PROJECT_ROOT, "Oracle_to_Postgre_Business_Columns 2.xlsx"),
+    "output_dir": DEFAULT_OUTPUT_DIR,
+    "excel_path": DEFAULT_EXCEL_PATH,
     "exclude_columns": "extraction_timestamp",
     "exclude_suffix": "key",
     "trim_strings": True,

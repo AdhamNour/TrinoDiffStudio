@@ -327,105 +327,130 @@ Item {
                     }
                     spacing: Theme.spacingMd
 
-                    Column {
-                        spacing: 2
-                        Text {
-                            text: "🤖 Ollama / Qwen 2.5 Coder AI Configuration"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeMd
-                            font.weight: Font.DemiBold
-                            color: Theme.textPrimary
+                    // Header with title and Master Enable/Disable Switch
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        Column {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Text {
+                                text: "🤖 Ollama / Qwen 2.5 Coder AI Configuration"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeMd
+                                font.weight: Font.DemiBold
+                                color: Theme.textPrimary
+                            }
+                            Text {
+                                text: "Local LLM endpoint used to diagnose cross-database Trino errors and suggest SQL fixes."
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSm
+                                color: Theme.textMuted
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                            }
                         }
-                        Text {
-                            text: "Local LLM endpoint used to diagnose cross-database Trino errors and suggest SQL fixes."
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeSm
-                            color: Theme.textMuted
-                            width: parent.width
-                            wrapMode: Text.WordWrap
+
+                        AppSwitch {
+                            id: enableAiSwitch
+                            checked: backend.config.enable_ai_diagnosis !== false
+                            text: checked ? "AI Enabled" : "AI Disabled"
                         }
                     }
 
                     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
-                    RowLayout {
+                    // Ollama configuration sub-section (disabled when AI is switched off)
+                    Column {
                         width: parent.width
                         spacing: Theme.spacingMd
+                        enabled: enableAiSwitch.checked
+                        opacity: enableAiSwitch.checked ? 1.0 : 0.4
 
-                        AppTextField {
-                            id: ollamaUrlField
-                            Layout.fillWidth: true
-                            label: "Ollama API URL"
-                            text: backend.config.ollama_url || "http://localhost:11434"
-                            placeholderText: "http://localhost:11434"
-                        }
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
 
-                        AppTextField {
-                            id: ollamaModelField
-                            Layout.preferredWidth: 220
-                            label: "Ollama Model"
-                            text: backend.config.ollama_model || "qwen2.5-coder:1.5b"
-                            placeholderText: "qwen2.5-coder:1.5b"
-                        }
-                    }
+                        RowLayout {
+                            width: parent.width
+                            spacing: Theme.spacingMd
 
-                    RowLayout {
-                        width: parent.width
-                        spacing: Theme.spacingMd
+                            AppTextField {
+                                id: ollamaUrlField
+                                Layout.fillWidth: true
+                                label: "Ollama API URL"
+                                text: backend.config.ollama_url || "http://localhost:11434"
+                                placeholderText: "http://localhost:11434"
+                            }
 
-                        AppComboBox {
-                            id: aiEffortCombo
-                            Layout.fillWidth: true
-                            label: "AI Reasoning & Validation Effort"
-                            model: ["High (Deep Multi-Step Self-Validation)", "Medium (Balanced Verification)", "Low (Fast Single-Pass)"]
-                            currentIndex: {
-                                var eff = (backend.config.ai_effort || "High").toLowerCase()
-                                if (eff.indexOf("low") !== -1) return 2
-                                if (eff.indexOf("med") !== -1) return 1
-                                return 0
+                            AppTextField {
+                                id: ollamaModelField
+                                Layout.preferredWidth: 220
+                                label: "Ollama Model"
+                                text: backend.config.ollama_model || "qwen2.5-coder:1.5b"
+                                placeholderText: "qwen2.5-coder:1.5b"
                             }
                         }
-                    }
 
-                    Text {
-                        text: "💡 High effort instructs the AI to perform an exhaustive multi-point self-validation checklist (type casting audit, syntax verification, schema qualifiers) before outputting the corrected SQL."
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeXs
-                        color: Theme.textMuted
-                        width: parent.width
-                        wrapMode: Text.WordWrap
-                    }
+                        RowLayout {
+                            width: parent.width
+                            spacing: Theme.spacingMd
 
-                    RowLayout {
-                        width: parent.width
-                        spacing: Theme.spacingMd
-
-                        AppButton {
-                            text: root.isTestingOllama ? "Testing…" : "⚡ Test Ollama Connection"
-                            variant: "primary"
-                            implicitHeight: 36
-                            enabled: !root.isTestingOllama
-                            onClicked: {
-                                root.isTestingOllama = true
-                                root.ollamaTestResult = ""
-                                backend.testOllamaConnectionAsync(ollamaUrlField.text, ollamaModelField.text)
+                            AppComboBox {
+                                id: aiEffortCombo
+                                Layout.fillWidth: true
+                                label: "AI Reasoning & Validation Effort"
+                                model: ["High (Deep Multi-Step Self-Validation)", "Medium (Balanced Verification)", "Low (Fast Single-Pass)"]
+                                currentIndex: {
+                                    var eff = (backend.config.ai_effort || "High").toLowerCase()
+                                    if (eff.indexOf("low") !== -1) return 2
+                                    if (eff.indexOf("med") !== -1) return 1
+                                    return 0
+                                }
                             }
                         }
 
                         Text {
-                            visible: root.ollamaTestResult !== ""
-                            text: root.ollamaTestResult === "SUCCESS" ? "✓ Ollama & Model Available" : root.ollamaTestResult
+                            text: "💡 High effort instructs the AI to perform an exhaustive multi-point self-validation checklist (type casting audit, syntax verification, schema qualifiers) before outputting the corrected SQL."
                             font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeSm
-                            color: root.ollamaTestResult === "SUCCESS" ? Theme.accentEmerald : Theme.accentRose
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textMuted
+                            width: parent.width
+                            wrapMode: Text.WordWrap
                         }
-                    }
-                    AppCheckBox {
-                        id: autoAiCheck
-                        checked: backend.config.auto_ai_diagnosis !== false
-                        text: "Auto-diagnose Trino errors in background with AI during batch execution"
+
+                        RowLayout {
+                            width: parent.width
+                            spacing: Theme.spacingMd
+
+                            AppButton {
+                                text: root.isTestingOllama ? "Testing…" : "⚡ Test Ollama Connection"
+                                variant: "primary"
+                                implicitHeight: 36
+                                enabled: enableAiSwitch.checked && !root.isTestingOllama
+                                onClicked: {
+                                    root.isTestingOllama = true
+                                    root.ollamaTestResult = ""
+                                    backend.testOllamaConnectionAsync(ollamaUrlField.text, ollamaModelField.text)
+                                }
+                            }
+
+                            Text {
+                                visible: root.ollamaTestResult !== ""
+                                text: root.ollamaTestResult === "SUCCESS" ? "✓ Ollama & Model Available" : root.ollamaTestResult
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSm
+                                color: root.ollamaTestResult === "SUCCESS" ? Theme.accentEmerald : Theme.accentRose
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                            }
+                        }
+
+                        AppCheckBox {
+                            id: autoAiCheck
+                            checked: backend.config.auto_ai_diagnosis !== false
+                            text: "Auto-diagnose Trino errors in background with AI during batch execution"
+                        }
                     }
                 }
             }
@@ -460,6 +485,7 @@ Item {
                             trimStringsCheck.checked,
                             notifyTableCheck.checked,
                             notifyBatchCheck.checked,
+                            enableAiSwitch.checked,
                             ollamaUrlField.text,
                             ollamaModelField.text,
                             effortVal,

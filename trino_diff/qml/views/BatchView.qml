@@ -322,14 +322,14 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                             }
 
-                            // AI Fix button (shown for failing tables)
+                            // AI Fix button (shown for failing tables when AI is enabled)
                             AppButton {
                                 text: modelData.ai_status === "Ready" ? "🤖 View AI Fix"
                                     : (modelData.ai_status === "Diagnosing" ? "🤖 Diagnosing…" : "🤖 AI Fix")
                                 variant: modelData.ai_status === "Ready" ? "primary" : "danger"
                                 implicitHeight: 28
                                 customPaddingH: 8
-                                visible: modelData.status === "Error"
+                                visible: (backend.config.enable_ai_diagnosis !== false) && modelData.status === "Error"
                                 ToolTip.visible: hovered
                                 ToolTip.text: modelData.ai_status === "Ready"
                                               ? "AI diagnosis and SQL fix are ready! Click to view."

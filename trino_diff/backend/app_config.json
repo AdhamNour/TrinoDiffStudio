@@ -13,6 +13,7 @@
     "trim_strings": true,
     "notify_table_complete": false,
     "notify_batch_complete": true,
+    "enable_ai_diagnosis": false,
     "ollama_url": "http://localhost:11434",
     "ollama_model": "qwen2.5-coder:0.5b",
     "ai_effort": "High",

@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {
     "trim_strings": True,
     "notify_table_complete": True,
     "notify_batch_complete": True,
+    "enable_ai_diagnosis": True,
     "ollama_url": "http://localhost:11434",
     "ollama_model": "qwen2.5-coder:1.5b",
     "ai_effort": "High",

@@ -319,7 +319,8 @@ class BackendController(QObject):
         self.statusTextChanged.emit()
 
     def _onWorkerTableError(self, table_name: str, error_msg: str, query: str):
-        auto_ai = self._config.get("auto_ai_diagnosis", True)
+        enable_ai = self._config.get("enable_ai_diagnosis", True)
+        auto_ai = enable_ai and self._config.get("auto_ai_diagnosis", True)
         self._table_errors[table_name] = {
             "error": error_msg,
             "query": query,
@@ -333,7 +334,7 @@ class BackendController(QObject):
             if t["table_name"] == table_name:
                 t["error_message"] = error_msg
                 t["failed_query"] = query
-                t["ai_status"] = "Diagnosing" if auto_ai else "Idle"
+                t["ai_status"] = "Diagnosing" if auto_ai else ("Disabled" if not enable_ai else "Idle")
                 t["ai_explanation"] = ""
                 t["suggested_sql"] = ""
                 t["ai_prompt"] = ""
@@ -586,6 +587,11 @@ class BackendController(QObject):
     # -----------------------------------------------------------------------
 
     def _runAsyncAiDiagnosis(self, table_name: str, error_msg: str, failed_query: str, notify_ui: bool = False):
+        if not self._config.get("enable_ai_diagnosis", True):
+            if notify_ui:
+                self.notificationEmitted.emit("warning", "AI Diagnosis is currently disabled in Settings.")
+            return
+
         clean_name = table_name.strip()
         config_copy = self._config.copy()
         effort = config_copy.get("ai_effort", "High")
@@ -755,6 +761,11 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
     @Slot(str)
     @Slot(str, bool)
     def explainTableError(self, table_name: str, force: bool = False):
+        if not self._config.get("enable_ai_diagnosis", True):
+            self.notificationEmitted.emit("warning", "AI Diagnosis is currently disabled in Settings.")
+            self.appendLog("WARN", "[AI Assistant] Cannot run AI diagnosis: AI feature is disabled in Settings.")
+            return
+
         clean_name = table_name.strip()
         err_info = self._table_errors.get(clean_name, {})
         error_msg = err_info.get("error", "")
@@ -887,6 +898,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
     # Settings
     # -----------------------------------------------------------------------
 
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool)
     @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str, str, bool)
     def updateSettings(
         self,
@@ -902,11 +914,26 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         trim_strings: bool,
         notify_table: bool = True,
         notify_batch: bool = True,
+        enable_ai_diagnosis: bool = True,
         ollama_url: str = "http://localhost:11434",
         ollama_model: str = "qwen2.5-coder:1.5b",
         ai_effort: str = "High",
         auto_ai: bool = True
     ):
+        if isinstance(enable_ai_diagnosis, str):
+            # Called with old 16-parameter overload (where arg 13 was ollama_url)
+            real_enable_ai = True
+            real_ollama_url = enable_ai_diagnosis.strip() or "http://localhost:11434"
+            real_ollama_model = ollama_url.strip() or "qwen2.5-coder:1.5b"
+            real_ai_effort = ollama_model.strip() or "High"
+            real_auto_ai = bool(ai_effort) if not isinstance(ai_effort, str) else True
+        else:
+            real_enable_ai = bool(enable_ai_diagnosis)
+            real_ollama_url = ollama_url.strip() or "http://localhost:11434"
+            real_ollama_model = ollama_model.strip() or "qwen2.5-coder:1.5b"
+            real_ai_effort = ai_effort.strip() or "High"
+            real_auto_ai = bool(auto_ai)
+
         self._config["trino_host"] = host.strip()
         self._config["trino_port"] = port
         self._config["trino_user"] = user.strip()
@@ -919,10 +946,11 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         self._config["trim_strings"] = trim_strings
         self._config["notify_table_complete"] = bool(notify_table)
         self._config["notify_batch_complete"] = bool(notify_batch)
-        self._config["ollama_url"] = ollama_url.strip() or "http://localhost:11434"
-        self._config["ollama_model"] = ollama_model.strip() or "qwen2.5-coder:1.5b"
-        self._config["ai_effort"] = ai_effort.strip() or "High"
-        self._config["auto_ai_diagnosis"] = bool(auto_ai)
+        self._config["enable_ai_diagnosis"] = real_enable_ai
+        self._config["ollama_url"] = real_ollama_url
+        self._config["ollama_model"] = real_ollama_model
+        self._config["ai_effort"] = real_ai_effort
+        self._config["auto_ai_diagnosis"] = real_auto_ai
 
         save_config(self._config)
         self.configChanged.emit()

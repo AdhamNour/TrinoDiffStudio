@@ -23,6 +23,19 @@ Item {
         return res
     }
 
+    // Preserve scroll position across model data updates
+    onFilteredTablesChanged: {
+        if (!tableListView.moving && !tableListView.flicking) {
+            var prevY = tableListView.contentY
+            Qt.callLater(function() {
+                if (tableListView.contentHeight > tableListView.height) {
+                    var maxY = tableListView.contentHeight - tableListView.height
+                    tableListView.contentY = Math.max(0, Math.min(prevY, maxY))
+                }
+            })
+        }
+    }
+
     FileDialog {
         id: fileDialog
         title: "Select Business Columns Excel File"
@@ -198,179 +211,182 @@ Item {
             border.width: 1
             clip: true
 
-            ScrollView {
+            ListView {
+                id: tableListView
                 anchors.fill: parent
                 anchors.margins: Theme.spacingSm
                 clip: true
+                spacing: 5
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.filteredTables
+                reuseItems: true
 
-                ListView {
-                    id: tableListView
-                    width: parent.width
-                    spacing: 5
-                    model: root.filteredTables
+                ScrollBar.vertical: ScrollBar {
+                    id: vScrollBar
+                    policy: ScrollBar.AsNeeded
+                }
 
-                    delegate: Rectangle {
-                        width: tableListView.width - 10
-                        height: 64
-                        radius: Theme.radiusSm
-                        color: modelData.selected ? Theme.bgCardHover : Theme.bgInput
-                        border.color: modelData.selected ? Theme.borderFocus : Theme.borderSubtle
-                        border.width: 1
+                delegate: Rectangle {
+                    width: tableListView.width - (vScrollBar.visible ? 14 : 6)
+                    height: 64
+                    radius: Theme.radiusSm
+                    color: modelData.selected ? Theme.bgCardHover : Theme.bgInput
+                    border.color: modelData.selected ? Theme.borderFocus : Theme.borderSubtle
+                    border.width: 1
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin:  Theme.spacingMd
-                            anchors.rightMargin: Theme.spacingMd
-                            spacing: Theme.spacingSm
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin:  Theme.spacingMd
+                        anchors.rightMargin: Theme.spacingMd
+                        spacing: Theme.spacingSm
 
-                            // Checkbox
-                            AppCheckBox {
-                                id: rowCheck
-                                checked: modelData.selected
-                                onToggled: backend.toggleTableSelection(modelData.table_name, checked)
+                        // Checkbox
+                        AppCheckBox {
+                            id: rowCheck
+                            checked: modelData.selected
+                            onToggled: backend.toggleTableSelection(modelData.table_name, checked)
+                        }
+
+                        // Table name + id-column count
+                        Column {
+                            Layout.preferredWidth: 240
+                            spacing: 2
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Text {
+                                text: modelData.table_name
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeMd
+                                font.weight: Font.DemiBold
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
+                                width: parent.width
                             }
 
-                            // Table name + id-column count
-                            Column {
-                                Layout.preferredWidth: 240
-                                spacing: 2
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                Text {
-                                    text: modelData.table_name
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: Theme.fontSizeMd
-                                    font.weight: Font.DemiBold
-                                    color: Theme.textPrimary
-                                    elide: Text.ElideRight
-                                    width: parent.width
-                                }
-
-                                Text {
-                                    text: (modelData.id_columns ? modelData.id_columns.length : 0) + " ID column(s)"
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: Theme.fontSizeXs
-                                    color: Theme.textMuted
-                                }
+                            Text {
+                                text: (modelData.id_columns ? modelData.id_columns.length : 0) + " ID column(s)"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeXs
+                                color: Theme.textMuted
                             }
+                        }
 
-                            // ID column chip tags
-                            Row {
-                                Layout.fillWidth: true
-                                spacing: 5
-                                clip: true
-                                anchors.verticalCenter: parent.verticalCenter
+                        // ID column chip tags
+                        Row {
+                            Layout.fillWidth: true
+                            spacing: 5
+                            clip: true
+                            anchors.verticalCenter: parent.verticalCenter
 
-                                Repeater {
-                                    model: modelData.id_columns ? modelData.id_columns.slice(0, 4) : []
+                            Repeater {
+                                model: modelData.id_columns ? modelData.id_columns.slice(0, 4) : []
 
-                                    delegate: Rectangle {
-                                        required property string modelData
-                                        implicitWidth:  chipLabel.implicitWidth + 12
-                                        implicitHeight: 22
-                                        radius: 4
-                                        color: "#1A2540"
-                                        border.color: Theme.border
-                                        border.width: 1
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    implicitWidth:  chipLabel.implicitWidth + 12
+                                    implicitHeight: 22
+                                    radius: 4
+                                    color: "#1A2540"
+                                    border.color: Theme.border
+                                    border.width: 1
 
-                                        Text {
-                                            id: chipLabel
-                                            anchors.centerIn: parent
-                                            text: modelData
-                                            font.family: Theme.monoFontFamily
-                                            font.pixelSize: 10
-                                            color: Theme.accentCyan
-                                        }
+                                    Text {
+                                        id: chipLabel
+                                        anchors.centerIn: parent
+                                        text: modelData
+                                        font.family: Theme.monoFontFamily
+                                        font.pixelSize: 10
+                                        color: Theme.accentCyan
                                     }
                                 }
-
-                                Text {
-                                    visible: modelData.id_columns && modelData.id_columns.length > 4
-                                    text: "+" + (modelData.id_columns.length - 4) + " more"
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: Theme.fontSizeXs
-                                    color: Theme.textMuted
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
                             }
 
-                            // Diff count badge (shown only after run)
-                            Rectangle {
-                                visible: modelData.status === "Completed"
-                                implicitWidth:  diffLbl.implicitWidth + 18
-                                implicitHeight: 22
-                                radius: Theme.radiusFull
-                                color:  modelData.diff_count > 0 ? "#4D2000" : "#003322"
-                                border.color: modelData.diff_count > 0 ? "#F59E0B" : "#10B981"
-                                border.width: 1
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                Text {
-                                    id: diffLbl
-                                    anchors.centerIn: parent
-                                    text: modelData.diff_count + " diffs"
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: Theme.fontSizeXs
-                                    font.weight: Font.DemiBold
-                                    color: modelData.diff_count > 0 ? "#FDE68A" : "#A7F3D0"
-                                }
-                            }
-
-                            // Status badge
-                            StatusBadge {
-                                status: modelData.status || "Ready"
+                            Text {
+                                visible: modelData.id_columns && modelData.id_columns.length > 4
+                                text: "+" + (modelData.id_columns.length - 4) + " more"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeXs
+                                color: Theme.textMuted
                                 anchors.verticalCenter: parent.verticalCenter
                             }
+                        }
 
-                            // AI Fix button (shown for failing tables when AI is enabled)
-                            AppButton {
-                                text: modelData.ai_status === "Ready" ? "🤖 View AI Fix"
-                                    : (modelData.ai_status === "Diagnosing" ? "🤖 Diagnosing…" : "🤖 AI Fix")
-                                variant: modelData.ai_status === "Ready" ? "primary" : "danger"
-                                implicitHeight: 28
-                                customPaddingH: 8
-                                visible: (backend.config.enable_ai_diagnosis !== false) && modelData.status === "Error"
-                                ToolTip.visible: hovered
-                                ToolTip.text: modelData.ai_status === "Ready"
-                                              ? "AI diagnosis and SQL fix are ready! Click to view."
-                                              : (modelData.ai_status === "Diagnosing"
-                                                 ? "Qwen 2.5-Coder is analyzing this error in parallel with Trino batch..."
-                                                 : "Ask Qwen 2.5-Coder to explain this Trino error and suggest a SQL fix")
-                                onClicked: backend.explainTableError(modelData.table_name)
+                        // Diff count badge (shown only after run)
+                        Rectangle {
+                            visible: modelData.status === "Completed"
+                            implicitWidth:  diffLbl.implicitWidth + 18
+                            implicitHeight: 22
+                            radius: Theme.radiusFull
+                            color:  modelData.diff_count > 0 ? "#4D2000" : "#003322"
+                            border.color: modelData.diff_count > 0 ? "#F59E0B" : "#10B981"
+                            border.width: 1
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Text {
+                                id: diffLbl
+                                anchors.centerIn: parent
+                                text: modelData.diff_count + " diffs"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeXs
+                                font.weight: Font.DemiBold
+                                color: modelData.diff_count > 0 ? "#FDE68A" : "#A7F3D0"
                             }
+                        }
 
-                            // Action buttons
-                            AppButton {
-                                text: "SQL"
-                                variant: "ghost"
-                                implicitHeight: 28
-                                customPaddingH: 8
-                                onClicked: {
-                                    backend.generateSqlPreview(
-                                        modelData.table_name,
-                                        "auto",
-                                        (modelData.id_columns || []).join(","),
-                                        sourceCatCombo.currentText,
-                                        targetCatCombo.currentText
-                                    )
-                                }
+                        // Status badge
+                        StatusBadge {
+                            status: modelData.status || "Ready"
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        // AI Fix button (shown for failing tables when AI is enabled)
+                        AppButton {
+                            text: modelData.ai_status === "Ready" ? "🤖 View AI Fix"
+                                : (modelData.ai_status === "Diagnosing" ? "🤖 Diagnosing…" : "🤖 AI Fix")
+                            variant: modelData.ai_status === "Ready" ? "primary" : "danger"
+                            implicitHeight: 28
+                            customPaddingH: 8
+                            visible: (backend.config.enable_ai_diagnosis !== false) && modelData.status === "Error"
+                            ToolTip.visible: hovered
+                            ToolTip.text: modelData.ai_status === "Ready"
+                                          ? "AI diagnosis and SQL fix are ready! Click to view."
+                                          : (modelData.ai_status === "Diagnosing"
+                                             ? "Qwen 2.5-Coder is analyzing this error in parallel with Trino batch..."
+                                             : "Ask Qwen 2.5-Coder to explain this Trino error and suggest a SQL fix")
+                            onClicked: backend.explainTableError(modelData.table_name)
+                        }
+
+                        // Action buttons
+                        AppButton {
+                            text: "SQL"
+                            variant: "ghost"
+                            implicitHeight: 28
+                            customPaddingH: 8
+                            onClicked: {
+                                backend.generateSqlPreview(
+                                    modelData.table_name,
+                                    "auto",
+                                    (modelData.id_columns || []).join(","),
+                                    sourceCatCombo.currentText,
+                                    targetCatCombo.currentText
+                                )
                             }
+                        }
 
-                            AppButton {
-                                text: "Run"
-                                variant: "secondary"
-                                implicitHeight: 28
-                                customPaddingH: 10
-                                enabled: !backend.isRunning
-                                onClicked: {
-                                    backend.runSingleTable(
-                                        modelData.table_name,
-                                        "auto",
-                                        (modelData.id_columns || []).join(","),
-                                        sourceCatCombo.currentText,
-                                        targetCatCombo.currentText
-                                    )
-                                }
+                        AppButton {
+                            text: "Run"
+                            variant: "secondary"
+                            implicitHeight: 28
+                            customPaddingH: 10
+                            enabled: !backend.isRunning
+                            onClicked: {
+                                backend.runSingleTable(
+                                    modelData.table_name,
+                                    "auto",
+                                    (modelData.id_columns || []).join(","),
+                                    sourceCatCombo.currentText,
+                                    targetCatCombo.currentText
+                                )
                             }
                         }
                     }

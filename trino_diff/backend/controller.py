@@ -43,15 +43,20 @@ class BackendController(QObject):
     aiDiagnosisLoading = Signal(str, bool)    # (table_name, is_loading)
     ollamaTestFinished = Signal(bool, str)    # (success, message)
 
-    def __init__(self):
+    def __init__(self, progress_callback=None):
         super().__init__()
-        self.db = DatabaseManager()
+        if progress_callback:
+            progress_callback(35, "Loading configuration & preferences...")
         self._config = load_config()
         self._notifier = WindowsNotifier()
         self._catalogs = ["postgres", "oracle"]
         self._tables = []
         self._logs = []
         self._output_files = []
+        
+        if progress_callback:
+            progress_callback(50, "Connecting to local database & history store...")
+        self.db = DatabaseManager()
         self._batches = self.db.get_batches_list()
         self._current_batch_id = ""
         self._selected_batch_filter = ""
@@ -71,9 +76,13 @@ class BackendController(QObject):
         # Load initial excel if present
         excel_path = self._config.get("excel_path", "")
         if excel_path and os.path.exists(excel_path):
+            if progress_callback:
+                progress_callback(65, "Loading table definitions from Excel mapping...")
             self.loadExcel(excel_path)
 
         # Refresh output files
+        if progress_callback:
+            progress_callback(78, "Scanning output catalog & reports directory...")
         self.refreshOutputFiles()
 
     # -----------------------------------------------------------------------

@@ -2,7 +2,7 @@
 """
 Trino Database Diff Studio — PySide6 + QML GUI
 ===============================================
-Main application launcher.
+Main application launcher with instant splash screen and staged progress reporting.
 """
 
 import os
@@ -20,7 +20,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtCore import QUrl, Qt
 
-from trino_diff.backend.controller import BackendController
+from trino_diff.splash import SplashScreen
 
 
 def main():
@@ -36,11 +36,12 @@ def main():
 
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
+    # ── 1. Create Qt Application Instance ────────────────────────────────────
     app = QApplication(sys.argv)
     app.setApplicationName("Trino Diff Studio")
     app.setOrganizationName("Nera")
 
-    # ── Application & Taskbar Icon ───────────────────────────────────────────
+    # ── 2. Application & Taskbar Icons ───────────────────────────────────────
     res_dir = os.path.join(SCRIPT_DIR, "resources")
     ico_path = os.path.join(res_dir, "app_icon.ico")
     png_path = os.path.join(res_dir, "app_icon.png")
@@ -60,41 +61,72 @@ def main():
     if not app_icon.isNull():
         app.setWindowIcon(app_icon)
 
-    # Create backend bridge controller
-    backend = BackendController()
+    # ── 3. Instant Splash Screen Display (< 200ms) ───────────────────────────
+    no_splash = "--no-splash" in sys.argv
+    splash = None
+    if not no_splash:
+        splash = SplashScreen(app_version="v1.0.0")
+        splash.show()
+        splash.set_progress(15, "Starting Trino Diff Studio runtime...")
 
-    # ── QML engine ───────────────────────────────────────────────────────────
-    engine = QQmlApplicationEngine()
+    try:
+        # ── 4. Staged Backend Initialization ─────────────────────────────────
+        if splash:
+            splash.set_progress(25, "Importing backend subsystem...")
+        
+        from trino_diff.backend.controller import BackendController
 
-    # Expose backend to QML as a context property
-    engine.rootContext().setContextProperty("backend", backend)
+        progress_callback = splash.set_progress if splash else None
+        backend = BackendController(progress_callback=progress_callback)
 
-    # Add the 'qml' directory itself as an import path.
-    # The qmldir file lives inside it, registering the singleton Theme and
-    # all component/view types under the module name "TrinoDiffQml".
-    # We also add the PARENT of qml/ so that relative imports (".", "./components")
-    # inside the view files still resolve correctly.
-    qml_dir = os.path.join(SCRIPT_DIR, "qml")
-    engine.addImportPath(qml_dir)          # for qmldir-based imports
-    engine.addImportPath(SCRIPT_DIR)       # so 'import "."' from qml/ resolves to qml/
+        # ── 5. Initialize QML Presentation Engine ────────────────────────────
+        if splash:
+            splash.set_progress(82, "Initializing QML presentation engine...")
 
-    # Load the root QML file
-    main_qml = os.path.join(qml_dir, "Main.qml")
-    engine.load(QUrl.fromLocalFile(main_qml))
+        engine = QQmlApplicationEngine()
 
-    if not engine.rootObjects():
-        print("[ERROR] Failed to load QML root object — check QML console output above.")
-        sys.exit(1)
+        # Expose backend to QML as a context property
+        engine.rootContext().setContextProperty("backend", backend)
 
-    # Explicitly set icon on root window if supported
-    root_window = engine.rootObjects()[0]
-    if hasattr(root_window, "setIcon") and not app_icon.isNull():
-        root_window.setIcon(app_icon)
+        # Add import paths for qmldir and relative views
+        qml_dir = os.path.join(SCRIPT_DIR, "qml")
+        engine.addImportPath(qml_dir)
+        engine.addImportPath(SCRIPT_DIR)
 
-    print("[INFO] Trino Diff Studio started successfully.")
-    sys.exit(app.exec())
+        # ── 6. Load Root QML Window ──────────────────────────────────────────
+        if splash:
+            splash.set_progress(92, "Loading UI views & components...")
+
+        main_qml = os.path.join(qml_dir, "Main.qml")
+        engine.load(QUrl.fromLocalFile(main_qml))
+
+        if not engine.rootObjects():
+            err_msg = "Failed to load QML root object — check QML syntax or console logs."
+            print(f"[ERROR] {err_msg}")
+            if splash:
+                splash.show_error(err_msg)
+            sys.exit(1)
+
+        root_window = engine.rootObjects()[0]
+        if hasattr(root_window, "setIcon") and not app_icon.isNull():
+            root_window.setIcon(app_icon)
+
+        # ── 7. Transition from Splash to Main Window ─────────────────────────
+        if splash:
+            splash.finish(root_window)
+        else:
+            if hasattr(root_window, "show"):
+                root_window.show()
+
+        print("[INFO] Trino Diff Studio started successfully.")
+        sys.exit(app.exec())
+
+    except Exception as e:
+        print(f"[FATAL] Startup error: {e}")
+        if splash:
+            splash.show_error(str(e))
+        raise
 
 
 if __name__ == "__main__":
     main()
-

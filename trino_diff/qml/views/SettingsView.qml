@@ -274,12 +274,10 @@ Item {
                         }
                     }
 
-                    CheckBox {
+                    AppCheckBox {
                         id: trimStringsCheck
                         checked: backend.config.trim_strings !== false
                         text: "Trim strings (removes trailing whitespace from Oracle CHAR columns)"
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeSm
                     }
 
                     Rectangle { width: parent.width; height: 1; color: Theme.border }
@@ -297,20 +295,16 @@ Item {
                             color: Theme.textPrimary
                         }
 
-                        CheckBox {
+                        AppCheckBox {
                             id: notifyTableCheck
                             checked: backend.config.notify_table_complete !== false
                             text: "Notify when each individual table diff finishes"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeSm
                         }
 
-                        CheckBox {
+                        AppCheckBox {
                             id: notifyBatchCheck
                             checked: backend.config.notify_batch_complete !== false
                             text: "Notify when entire batch execution completes"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeSm
                         }
                     }
                 }
@@ -428,12 +422,10 @@ Item {
                             wrapMode: Text.Wrap
                         }
                     }
-                    CheckBox {
+                    AppCheckBox {
                         id: autoAiCheck
                         checked: backend.config.auto_ai_diagnosis !== false
                         text: "Auto-diagnose Trino errors in background with AI during batch execution"
-                        font.family: Theme.fontFamily
-                        font.pixelSize: Theme.fontSizeSm
                     }
                 }
             }

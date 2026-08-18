@@ -224,7 +224,7 @@ Item {
                             spacing: Theme.spacingSm
 
                             // Checkbox
-                            CheckBox {
+                            AppCheckBox {
                                 id: rowCheck
                                 checked: modelData.selected
                                 onToggled: backend.toggleTableSelection(modelData.table_name, checked)

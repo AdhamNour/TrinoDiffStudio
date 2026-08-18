@@ -3,6 +3,7 @@ AppButton components/AppButton.qml
 AppCard components/AppCard.qml
 AppTextField components/AppTextField.qml
 AppComboBox components/AppComboBox.qml
+AppCheckBox components/AppCheckBox.qml
 StatusBadge components/StatusBadge.qml
 LogViewer components/LogViewer.qml
 SqlViewerDialog components/SqlViewerDialog.qml

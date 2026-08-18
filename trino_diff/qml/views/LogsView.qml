@@ -101,11 +101,9 @@ Item {
                 color: Theme.border
             }
 
-            CheckBox {
+            AppCheckBox {
                 checked: root.autoScroll
                 text: "Auto-scroll"
-                font.family: Theme.fontFamily
-                font.pixelSize: Theme.fontSizeSm
                 Layout.alignment: Qt.AlignVCenter
                 onToggled: root.autoScroll = checked
             }

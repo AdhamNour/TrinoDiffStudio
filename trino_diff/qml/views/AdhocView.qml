@@ -157,12 +157,10 @@ Item {
                         width: parent.width
                         spacing: Theme.spacingMd
 
-                        CheckBox {
+                        AppCheckBox {
                             id: trimStringsCheck
                             checked: backend.config.trim_strings !== false
                             text: "Trim strings (CHAR padding)"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeSm
                         }
 
                         Item { Layout.fillWidth: true }

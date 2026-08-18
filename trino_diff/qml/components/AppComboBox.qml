@@ -45,23 +45,31 @@ Item {
 
             delegate: ItemDelegate {
                 id: itemDel
-                required property string modelData
+                required property var modelData
                 required property int index
-                width: combo.width
+                width: ListView.view ? ListView.view.width : combo.width
                 implicitHeight: 36
                 highlighted: combo.highlightedIndex === index
 
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    acceptedButtons: Qt.NoButton
+                }
+
                 contentItem: Text {
-                    text: itemDel.modelData
+                    text: typeof itemDel.modelData === "string" ? itemDel.modelData : (itemDel.modelData ? String(itemDel.modelData) : "")
                     color: itemDel.highlighted ? Theme.primary : Theme.textPrimary
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeBase
                     verticalAlignment: Text.AlignVCenter
                     leftPadding: Theme.spacingMd
+                    elide: Text.ElideRight
                 }
 
                 background: Rectangle {
                     color: itemDel.highlighted ? Theme.bgCardHover : "transparent"
+                    radius: Theme.radiusSm
                 }
             }
 

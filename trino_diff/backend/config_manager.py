@@ -1,5 +1,9 @@
 import json
 import os
+try:
+    from trino_diff.backend.db_manager import DatabaseManager
+except ImportError:
+    from backend.db_manager import DatabaseManager
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
@@ -29,25 +33,46 @@ DEFAULT_CONFIG = {
 
 
 def load_config() -> dict:
-    """Load configuration from file or return default."""
+    """
+    Load configuration from SQLite database if available,
+    falling back to app_config.json and DEFAULT_CONFIG.
+    """
+    db = DatabaseManager()
+    db_config = db.get_latest_app_config()
+    if db_config:
+        config = DEFAULT_CONFIG.copy()
+        config.update(db_config)
+        return config
+
+    # Fallback to app_config.json
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 saved = json.load(f)
                 config = DEFAULT_CONFIG.copy()
                 config.update(saved)
+                # Seed into SQLite
+                db.save_app_config(config)
                 return config
         except Exception:
             pass
-    return DEFAULT_CONFIG.copy()
+
+    config = DEFAULT_CONFIG.copy()
+    db.save_app_config(config)
+    return config
 
 
 def save_config(config: dict) -> bool:
-    """Save configuration dictionary to file."""
+    """Save configuration dictionary to both app_config.json and SQLite database."""
+    success_json = False
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4)
-        return True
+        success_json = True
     except Exception as e:
-        print(f"[ERROR] Failed to save config: {e}")
-        return False
+        print(f"[ERROR] Failed to save config to JSON: {e}")
+
+    db = DatabaseManager()
+    success_db = db.save_app_config(config)
+
+    return success_json or success_db

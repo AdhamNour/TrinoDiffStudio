@@ -9,17 +9,42 @@ Item {
 
     property string searchFilter: ""
     property string typeFilter: "ALL"
+    property string selectedBatchId: "ALL"
+
+    property var batchComboModel: {
+        var list = ["All Batches"]
+        var bList = (backend && backend.batches) ? backend.batches : []
+        for (var i = 0; i < bList.length; i++) {
+            var b = bList[i]
+            if (b) {
+                var label = (b.batch_id || "") + " [" + (b.started_at || "") + " • " + (b.status || "") + "]"
+                list.push(label)
+            }
+        }
+        return list
+    }
+
+    property var currentSelectedBatch: {
+        if (root.selectedBatchId === "ALL" || !root.selectedBatchId) return null
+        var bList = (backend && backend.batches) ? backend.batches : []
+        for (var i = 0; i < bList.length; i++) {
+            if (bList[i] && bList[i].batch_id === root.selectedBatchId) return bList[i]
+        }
+        return null
+    }
 
     property var filteredFiles: {
-        var raw = backend.outputFiles || []
+        var raw = (backend && backend.outputFiles) ? backend.outputFiles : []
         var tf = root.typeFilter
         var sf = root.searchFilter
         var res = []
         for (var i = 0; i < raw.length; i++) {
             var f = raw[i]
-            if (tf !== "ALL" && f.type !== tf) continue
-            if (sf && f.name.toLowerCase().indexOf(sf) === -1) continue
-            res.push(f)
+            if (f) {
+                if (tf !== "ALL" && f.type !== tf) continue
+                if (sf && f.name && f.name.toLowerCase().indexOf(sf) === -1) continue
+                res.push(f)
+            }
         }
         return res
     }
@@ -44,7 +69,7 @@ Item {
                     color: Theme.textPrimary
                 }
                 Text {
-                    text: "Output Directory: " + (backend.config.output_dir || "output/")
+                    text: "Database: ~/Documents/TrinoDiffStudio/trino_diff.db  •  Output: " + ((backend && backend.config) ? (backend.config.output_dir || "output/") : "output/")
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeXs
                     color: Theme.textMuted
@@ -56,7 +81,9 @@ Item {
             AppButton {
                 text: "⟳ Refresh"
                 variant: "ghost"
-                onClicked: backend.refreshOutputFiles()
+                onClicked: {
+                    backend.refreshOutputFiles(root.selectedBatchId)
+                }
             }
 
             AppButton {
@@ -66,7 +93,160 @@ Item {
             }
         }
 
-        // Filters Bar
+        // Batch Filter & Batch Info Card
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: batchCardCol.implicitHeight + Theme.spacingMd * 2
+            color: Theme.bgCard
+            radius: Theme.radiusMd
+            border.color: Theme.border
+            border.width: 1
+
+            ColumnLayout {
+                id: batchCardCol
+                anchors.fill: parent
+                anchors.margins: Theme.spacingMd
+                spacing: 8
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacingMd
+
+                    Text {
+                        text: "Filter by Batch:"
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeSm
+                        font.weight: Font.Medium
+                        color: Theme.textSecondary
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+
+                    AppComboBox {
+                        id: batchCombo
+                        Layout.fillWidth: true
+                        model: root.batchComboModel
+                        currentIndex: 0
+                        onActivated: (index) => {
+                            if (index === 0) {
+                                root.selectedBatchId = "ALL"
+                            } else {
+                                var bList = backend.batches || []
+                                if (index - 1 < bList.length) {
+                                    root.selectedBatchId = bList[index - 1].batch_id
+                                }
+                            }
+                            backend.filterOutputByBatch(root.selectedBatchId)
+                        }
+                    }
+
+                    AppButton {
+                        text: "Show All"
+                        variant: "ghost"
+                        implicitHeight: 36
+                        visible: root.selectedBatchId !== "ALL"
+                        Layout.alignment: Qt.AlignVCenter
+                        onClicked: {
+                            root.selectedBatchId = "ALL"
+                            batchCombo.currentIndex = 0
+                            backend.filterOutputByBatch("ALL")
+                        }
+                    }
+                }
+
+                // Batch summary banner (visible when a specific batch is selected)
+                RowLayout {
+                    id: batchDetailsRow
+                    Layout.fillWidth: true
+                    visible: root.currentSelectedBatch !== null
+                    spacing: Theme.spacingLg
+
+                    Row {
+                        spacing: 6
+                        Text {
+                            text: "Catalogs:"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textMuted
+                        }
+                        Text {
+                            text: (root.currentSelectedBatch ? (root.currentSelectedBatch.source_catalog + " ➔ " + root.currentSelectedBatch.target_catalog) : "")
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            font.weight: Font.DemiBold
+                            color: Theme.accentCyan
+                        }
+                    }
+
+                    Row {
+                        spacing: 6
+                        Text {
+                            text: "Status:"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textMuted
+                        }
+                        StatusBadge {
+                            status: root.currentSelectedBatch ? root.currentSelectedBatch.status : "Ready"
+                        }
+                    }
+
+                    Row {
+                        spacing: 6
+                        Text {
+                            text: "Tables:"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textMuted
+                        }
+                        Text {
+                            text: root.currentSelectedBatch ? (root.currentSelectedBatch.success_count + " ok, " + root.currentSelectedBatch.error_count + " failed / " + root.currentSelectedBatch.total_tables + " total") : ""
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            font.weight: Font.Medium
+                            color: Theme.textPrimary
+                        }
+                    }
+
+                    Row {
+                        spacing: 6
+                        Text {
+                            text: "Total Diffs:"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textMuted
+                        }
+                        Text {
+                            text: root.currentSelectedBatch ? (root.currentSelectedBatch.total_diffs + " row(s)") : "0"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            font.weight: Font.Bold
+                            color: Theme.accentAmber
+                        }
+                    }
+
+                    Row {
+                        spacing: 6
+                        visible: root.currentSelectedBatch && root.currentSelectedBatch.duration_seconds > 0
+                        Text {
+                            text: "Duration:"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textMuted
+                        }
+                        Text {
+                            text: root.currentSelectedBatch ? (root.currentSelectedBatch.duration_seconds + "s") : ""
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeXs
+                            color: Theme.textSecondary
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+            }
+        }
+
+        // Filters Bar (Search & File Type)
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.spacingMd
@@ -80,8 +260,10 @@ Item {
 
             Row {
                 spacing: 4
+                Layout.alignment: Qt.AlignVCenter
+
                 AppButton {
-                    text: "All"
+                    text: "All Files"
                     variant: root.typeFilter === "ALL" ? "primary" : "ghost"
                     implicitHeight: 32
                     onClicked: root.typeFilter = "ALL"
@@ -126,95 +308,98 @@ Item {
             border.color: Theme.border
             border.width: 1
 
-            ScrollView {
+            ListView {
+                id: fileListView
                 anchors.fill: parent
                 anchors.margins: Theme.spacingSm
                 clip: true
+                spacing: 6
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.filteredFiles
+                reuseItems: true
 
-                ListView {
-                    id: fileListView
-                    width: parent.width
-                    spacing: 6
-                    model: root.filteredFiles
+                ScrollBar.vertical: ScrollBar {
+                    id: vScrollBar
+                    policy: ScrollBar.AsNeeded
+                }
 
-                    delegate: Rectangle {
-                        width: fileListView.width - 12
-                        implicitHeight: 56
-                        radius: Theme.radiusSm
-                        color: Theme.bgInput
-                        border.color: Theme.borderSubtle
-                        border.width: 1
+                delegate: Rectangle {
+                    width: fileListView.width - (vScrollBar.visible ? 14 : 6)
+                    implicitHeight: 56
+                    radius: Theme.radiusSm
+                    color: Theme.bgInput
+                    border.color: Theme.borderSubtle
+                    border.width: 1
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.spacingMd
-                            anchors.rightMargin: Theme.spacingMd
-                            spacing: Theme.spacingMd
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.spacingMd
+                        anchors.rightMargin: Theme.spacingMd
+                        spacing: Theme.spacingMd
 
-                            // Type Icon Badge
-                            Rectangle {
-                                implicitWidth: 34
-                                implicitHeight: 34
-                                radius: Theme.radiusSm
-                                color: modelData.type === "Excel" ? "#064E3B"
-                                     : (modelData.type === "Parquet" ? "#3B0764" : "#1E3A8A")
-                                border.color: modelData.type === "Excel" ? "#059669"
-                                            : (modelData.type === "Parquet" ? "#9333EA" : "#3B82F6")
-                                border.width: 1
+                        // Type Icon Badge
+                        Rectangle {
+                            implicitWidth: 34
+                            implicitHeight: 34
+                            radius: Theme.radiusSm
+                            color: modelData.type === "Excel" ? "#064E3B"
+                                 : (modelData.type === "Parquet" ? "#3B0764" : "#1E3A8A")
+                            border.color: modelData.type === "Excel" ? "#059669"
+                                        : (modelData.type === "Parquet" ? "#9333EA" : "#3B82F6")
+                            border.width: 1
 
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: modelData.type === "Excel" ? "📊"
-                                        : (modelData.type === "Parquet" ? "📦" : "⚡")
-                                    font.pixelSize: 14
-                                }
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.type === "Excel" ? "📊"
+                                    : (modelData.type === "Parquet" ? "📦" : "⚡")
+                                font.pixelSize: 14
+                            }
+                        }
+
+                        // File Details
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Text {
+                                text: modelData.name
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeBase
+                                font.weight: Font.Medium
+                                color: Theme.textPrimary
+                                elide: Text.ElideRight
                             }
 
-                            // File Details
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-
-                                Text {
-                                    text: modelData.name
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: Theme.fontSizeBase
-                                    font.weight: Font.Medium
-                                    color: Theme.textPrimary
-                                    elide: Text.ElideRight
-                                }
-
-                                Text {
-                                    text: (modelData.size || "") + " • Modified: " + (modelData.modified || "")
-                                    font.family: Theme.fontFamily
-                                    font.pixelSize: Theme.fontSizeXs
-                                    color: Theme.textMuted
-                                }
+                            Text {
+                                text: (modelData.size || "") + " • Modified: " + (modelData.modified || "") + (modelData.table_name ? (" • Table: " + modelData.table_name) : "")
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeXs
+                                color: Theme.textMuted
                             }
+                        }
 
-                            // Actions
-                            AppButton {
-                                text: modelData.type === "Excel" ? "Open Excel"
-                                    : (modelData.type === "Parquet" ? "Open Parquet" : "Edit / Open")
-                                variant: "secondary"
-                                implicitHeight: 30
-                                onClicked: backend.openFile(modelData.path)
-                            }
+                        // Actions
+                        AppButton {
+                            text: modelData.type === "Excel" ? "Open Excel"
+                                : (modelData.type === "Parquet" ? "Open Parquet" : "Edit / Open")
+                            variant: "secondary"
+                            implicitHeight: 30
+                            onClicked: backend.openFile(modelData.path)
+                        }
 
-                            AppButton {
-                                text: "Open Folder"
-                                variant: "ghost"
-                                implicitHeight: 30
-                                onClicked: backend.openFolder(modelData.path)
-                            }
+                        AppButton {
+                            text: "Open Folder"
+                            variant: "ghost"
+                            implicitHeight: 30
+                            onClicked: backend.openFolder(modelData.path)
+                        }
 
-                            AppButton {
-                                text: "🗑"
-                                variant: "ghost"
-                                implicitHeight: 30
-                                customPaddingH: 8
-                                onClicked: backend.deleteOutputFile(modelData.path)
-                            }
+                        AppButton {
+                            text: "🗑"
+                            variant: "ghost"
+                            implicitHeight: 30
+                            customPaddingH: 8
+                            onClicked: backend.deleteOutputFile(modelData.path)
                         }
                     }
                 }
@@ -236,7 +421,9 @@ Item {
                 }
 
                 Text {
-                    text: "Generated diff SQL queries and Excel reports will appear here."
+                    text: root.selectedBatchId !== "ALL"
+                          ? "No output files linked to Batch " + root.selectedBatchId
+                          : "Generated diff SQL queries and Excel reports will appear here."
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeBase
                     color: Theme.textMuted
@@ -244,16 +431,5 @@ Item {
                 }
             }
         }
-    }
-
-    function getFilteredFiles() {
-        var result = []
-        for (var i = 0; i < backend.outputFiles.length; i++) {
-            var f = backend.outputFiles[i]
-            if (root.typeFilter !== "ALL" && f.type !== root.typeFilter) continue
-            if (root.searchFilter && f.name.toLowerCase().indexOf(root.searchFilter) === -1) continue
-            result.push(f)
-        }
-        return result
     }
 }

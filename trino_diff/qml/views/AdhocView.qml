@@ -8,13 +8,13 @@ Item {
     id: root
 
     ScrollView {
+        id: adhocScroll
         anchors.fill: parent
         anchors.margins: Theme.spacingLg
         clip: true
 
         ColumnLayout {
-            // Must match the ScrollView's width for layout to work inside a ScrollView
-            width: root.width - Theme.spacingLg * 2
+            width: adhocScroll.availableWidth
             spacing: Theme.spacingLg
 
             // ── Header ─────────────────────────────────────────────────────
@@ -87,18 +87,20 @@ Item {
                             id: sourceCatCombo
                             Layout.fillWidth: true
                             label: "Source Catalog"
-                            model: backend.catalogs
-                            currentIndex: Math.max(0, backend.catalogs.indexOf(backend.config.source_catalog || "postgres"))
+                            model: (backend && backend.catalogs) ? backend.catalogs : ["postgres", "oracle"]
+                            currentIndex: Math.max(0, (backend && backend.catalogs ? backend.catalogs : []).indexOf(backend && backend.config ? (backend.config.source_catalog || "postgres") : "postgres"))
                         }
 
                         AppComboBox {
                             id: targetCatCombo
                             Layout.fillWidth: true
                             label: "Target Catalog"
-                            model: backend.catalogs
+                            model: (backend && backend.catalogs) ? backend.catalogs : ["postgres", "oracle"]
                             currentIndex: {
-                                var idx = backend.catalogs.indexOf(backend.config.target_catalog || "oracle")
-                                return idx >= 0 ? idx : (backend.catalogs.length > 1 ? 1 : 0)
+                                var cats = (backend && backend.catalogs) ? backend.catalogs : []
+                                var targetCat = (backend && backend.config) ? (backend.config.target_catalog || "oracle") : "oracle"
+                                var idx = cats.indexOf(targetCat)
+                                return idx >= 0 ? idx : (cats.length > 1 ? 1 : 0)
                             }
                         }
                     }
@@ -141,14 +143,14 @@ Item {
                             id: excludeColsField
                             Layout.fillWidth: true
                             label: "Exclude Columns (comma-separated)"
-                            text: backend.config.exclude_columns || "extraction_timestamp"
+                            text: (backend && backend.config) ? (backend.config.exclude_columns || "extraction_timestamp") : "extraction_timestamp"
                         }
 
                         AppTextField {
                             id: excludeSuffixField
                             Layout.preferredWidth: 190
                             label: "Exclude Suffix"
-                            text: backend.config.exclude_suffix || "key"
+                            text: (backend && backend.config) ? (backend.config.exclude_suffix || "key") : "key"
                         }
                     }
 
@@ -159,7 +161,7 @@ Item {
 
                         AppCheckBox {
                             id: trimStringsCheck
-                            checked: backend.config.trim_strings !== false
+                            checked: backend && backend.config ? (backend.config.trim_strings !== false) : true
                             text: "Trim strings (CHAR padding)"
                         }
 
@@ -169,9 +171,9 @@ Item {
                             text: "🤖 AI Fix"
                             variant: "danger"
                             implicitHeight: 36
-                            visible: (backend.config.enable_ai_diagnosis !== false)
+                            visible: (backend && backend.config && backend.config.enable_ai_diagnosis !== false)
                                   && tableNameField.text.trim() !== ""
-                                  && backend.getTableErrorMessage(tableNameField.text.trim()) !== ""
+                                  && (backend ? backend.getTableErrorMessage(tableNameField.text.trim()) !== "" : false)
                             ToolTip.visible: hovered
                             ToolTip.text: "Diagnose Trino failure and generate fixed SQL with Qwen 2.5 Coder"
                             onClicked: backend.explainTableError(tableNameField.text.trim())
@@ -181,7 +183,7 @@ Item {
                             text: "🔍  Preview SQL"
                             variant: "secondary"
                             implicitHeight: 36
-                            enabled: !backend.isRunning
+                            enabled: (!backend || !backend.isRunning)
                                   && tableNameField.text.trim() !== ""
                                   && idColsField.text.trim()    !== ""
                             onClicked: {
@@ -196,10 +198,10 @@ Item {
                         }
 
                         AppButton {
-                            text: backend.isRunning ? "Running…" : "▶  Run & Export"
+                            text: (backend && backend.isRunning) ? "Running…" : "▶  Run & Export"
                             variant: "primary"
                             implicitHeight: 36
-                            enabled: !backend.isRunning
+                            enabled: (!backend || !backend.isRunning)
                                   && tableNameField.text.trim() !== ""
                                   && idColsField.text.trim()    !== ""
                             onClicked: {

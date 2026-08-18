@@ -14,6 +14,9 @@ Rectangle {
     border.color: Theme.border
     border.width: 1
 
+    implicitWidth: 300
+    implicitHeight: (root.title !== "" ? (cardHeader.implicitHeight + Theme.spacingMd) : 0) + contentArea.implicitHeight + Theme.spacingLg * 2
+
     // Header column (optional) ─ always at top of card
     Column {
         id: cardHeader
@@ -67,6 +70,6 @@ Rectangle {
         x: Theme.spacingLg
         y: root.title !== "" ? (cardHeader.y + cardHeader.height + Theme.spacingMd) : Theme.spacingLg
         width: root.width - Theme.spacingLg * 2
-        height: root.height - y - Theme.spacingLg
+        height: Math.max(0, root.height - y - Theme.spacingLg)
     }
 }

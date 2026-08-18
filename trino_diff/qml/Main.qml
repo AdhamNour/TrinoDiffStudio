@@ -166,7 +166,7 @@ ApplicationWindow {
                 NavItem {
                     icon: "📊"; label: "Batch Runner"
                     active: window.currentView === "batch"
-                    badge: backend.tables.length > 0 ? String(backend.tables.length) : ""
+                    badge: (backend && backend.tables && backend.tables.length > 0) ? String(backend.tables.length) : ""
                     onClicked: window.currentView = "batch"
                     Layout.fillWidth: true
                 }
@@ -179,7 +179,7 @@ ApplicationWindow {
                 NavItem {
                     icon: "📁"; label: "Reports & Output"
                     active: window.currentView === "output"
-                    badge: backend.outputFiles.length > 0 ? String(backend.outputFiles.length) : ""
+                    badge: (backend && backend.outputFiles && backend.outputFiles.length > 0) ? String(backend.outputFiles.length) : ""
                     onClicked: window.currentView = "output"
                     Layout.fillWidth: true
                 }
@@ -231,7 +231,7 @@ ApplicationWindow {
                         }
 
                         Text {
-                            text: (backend.config.trino_host || "localhost") + ":" + (backend.config.trino_port || 8080)
+                            text: (backend && backend.config ? (backend.config.trino_host || "localhost") : "localhost") + ":" + (backend && backend.config ? (backend.config.trino_port || 8080) : 8080)
                             font.family: Theme.monoFontFamily
                             font.pixelSize: 10
                             color: Theme.textMuted
@@ -313,16 +313,16 @@ ApplicationWindow {
                     spacing: Theme.spacingMd
 
                     Text {
-                        text: backend.statusText
+                        text: backend ? backend.statusText : "Ready"
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeXs
-                        color: backend.isRunning ? Theme.accentCyan : Theme.textSecondary
+                        color: (backend && backend.isRunning) ? Theme.accentCyan : Theme.textSecondary
                     }
 
                     ProgressBar {
-                        visible: backend.isRunning
+                        visible: backend ? backend.isRunning : false
                         Layout.preferredWidth: 180
-                        value: backend.progressPercent / 100.0
+                        value: backend ? (backend.progressPercent / 100.0) : 0
 
                         background: Rectangle {
                             implicitHeight: 6
@@ -333,7 +333,7 @@ ApplicationWindow {
                         contentItem: Item {
                             implicitHeight: 6
                             Rectangle {
-                                width: parent.width * (backend.progressPercent / 100.0)
+                                width: parent.width * (backend ? (backend.progressPercent / 100.0) : 0)
                                 height: parent.height
                                 radius: 3
                                 color: Theme.primary
@@ -345,8 +345,8 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
 
                     Text {
-                        text: "Source: " + (backend.config.source_catalog || "postgres") +
-                              "   ➔   Target: " + (backend.config.target_catalog || "oracle")
+                        text: "Source: " + (backend && backend.config ? (backend.config.source_catalog || "postgres") : "postgres") +
+                              "   ➔   Target: " + (backend && backend.config ? (backend.config.target_catalog || "oracle") : "oracle")
                         font.family: Theme.monoFontFamily
                         font.pixelSize: 11
                         color: Theme.textMuted

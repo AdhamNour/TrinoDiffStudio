@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Layouts
 import ".."
 
 // SqlViewerDialog lives inside components/ so:
@@ -15,9 +16,10 @@ Dialog {
 
     title: ""
     modal: true
-    anchors.centerIn: Overlay.overlay
-    width:  Math.min(Overlay.overlay ? Overlay.overlay.width  * 0.86 : 900, 940)
-    height: Math.min(Overlay.overlay ? Overlay.overlay.height * 0.86 : 680, 720)
+    x: Math.round((parent.width - width) / 2)
+    y: Math.round((parent.height - height) / 2)
+    width:  Math.min(parent ? parent.width * 0.86 : 900, 940)
+    height: Math.min(parent ? parent.height * 0.86 : 680, 720)
     padding: 0
 
     background: Rectangle {
@@ -30,20 +32,20 @@ Dialog {
     contentItem: Item {
         anchors.fill: parent
 
-        Column {
+        ColumnLayout {
             anchors.fill: parent
             anchors.margins: Theme.spacingLg
             spacing: Theme.spacingMd
 
             // ── Header ─────────────────────────────────────────────────────
-            Row {
-                width: parent.width
-                height: 44
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 44
+                spacing: Theme.spacingMd
 
-                Column {
-                    width: parent.width - btnRow.width - Theme.spacingMd
-                    spacing: 3
-                    anchors.verticalCenter: parent.verticalCenter
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
 
                     Text {
                         text: "Generated Trino SQL Query"
@@ -61,74 +63,34 @@ Dialog {
                     }
                 }
 
-                Row {
-                    id: btnRow
+                RowLayout {
                     spacing: Theme.spacingSm
-                    anchors.verticalCenter: parent.verticalCenter
 
                     // Copy button
-                    Rectangle {
-                        width: copyLbl.implicitWidth + 24
-                        height: 32
-                        radius: Theme.radiusSm
-                        color: copyMa.containsMouse ? Theme.bgInputHover : Theme.bgInput
-                        border.color: copyMa.containsMouse ? Theme.borderHover : Theme.border
-                        border.width: 1
-
-                        Text {
-                            id: copyLbl
-                            anchors.centerIn: parent
-                            text: "⎘  Copy SQL"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeBase
-                            color: Theme.textSecondary
-                        }
-
-                        MouseArea {
-                            id: copyMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                sqlTextEdit.selectAll()
-                                sqlTextEdit.copy()
-                            }
+                    AppButton {
+                        text: "⎘  Copy SQL"
+                        variant: "secondary"
+                        implicitHeight: 34
+                        onClicked: {
+                            sqlTextEdit.selectAll()
+                            sqlTextEdit.copy()
                         }
                     }
 
                     // Close button
-                    Rectangle {
-                        width: closeLbl.implicitWidth + 24
-                        height: 32
-                        radius: Theme.radiusSm
-                        color: closeMa.containsMouse ? Theme.bgCardHover : "transparent"
-                        border.color: closeMa.containsMouse ? Theme.border : "transparent"
-                        border.width: 1
-
-                        Text {
-                            id: closeLbl
-                            anchors.centerIn: parent
-                            text: "✕  Close"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeBase
-                            color: closeMa.containsMouse ? Theme.textPrimary : Theme.textSecondary
-                        }
-
-                        MouseArea {
-                            id: closeMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.close()
-                        }
+                    AppButton {
+                        text: "✕  Close"
+                        variant: "ghost"
+                        implicitHeight: 34
+                        onClicked: root.close()
                     }
                 }
             }
 
             // ── SQL Code View ───────────────────────────────────────────────
             Rectangle {
-                width: parent.width
-                height: parent.height - 44 - Theme.spacingMd
+                Layout.fillWidth: true
+                Layout.fillHeight: true
                 color: Theme.bgDark
                 radius: Theme.radiusSm
                 border.color: Theme.border

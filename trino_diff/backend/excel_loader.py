@@ -1,22 +1,38 @@
 import os
 import pandas as pd
 from typing import List, Dict, Any, Tuple
+try:
+    from trino_diff.backend.db_manager import DatabaseManager
+except ImportError:
+    from backend.db_manager import DatabaseManager
 
 
 def load_tables_from_excel(excel_path: str) -> Tuple[bool, List[Dict[str, Any]], str]:
     """
-    Read table names and business (ID) columns from the specified Excel file.
-    Handles comma-separated columns and normalises identifiers.
+    Read table names and business (ID) columns from the specified Excel file,
+    and persist the parsed mapping into the SQLite database.
     
     Returns:
         (success: bool, tables: list[dict], message: str)
     """
+    db = DatabaseManager()
+
     if not os.path.exists(excel_path):
+        # Check if we have previously cached mapping in SQLite
+        cached = db.get_latest_excel_mapping()
+        if cached:
+            _, tables = cached
+            return True, tables, f"Loaded {len(tables)} tables from SQLite cache (file not found on disk: {excel_path})"
         return False, [], f"Excel file not found: {excel_path}"
 
     try:
         df = pd.read_excel(excel_path)
     except Exception as e:
+        # Check SQLite fallback
+        cached = db.get_latest_excel_mapping()
+        if cached:
+            _, tables = cached
+            return True, tables, f"Loaded {len(tables)} tables from SQLite cache (Excel read error: {e})"
         return False, [], f"Failed to read Excel file: {e}"
 
     # Clean header names
@@ -76,5 +92,8 @@ def load_tables_from_excel(excel_path: str) -> Tuple[bool, List[Dict[str, Any]],
         for col in cols:
             if col not in seen_tables[tbl]["id_columns"]:
                 seen_tables[tbl]["id_columns"].append(col)
+
+    # Persist mapping to SQLite database
+    db.save_excel_mapping(excel_path, tables_config)
 
     return True, tables_config, f"Successfully loaded {len(tables_config)} tables"

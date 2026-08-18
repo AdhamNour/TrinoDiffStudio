@@ -13,18 +13,20 @@ Item {
 
     // Fully reactive filtered logs property bound to backend.logs, levelFilter, and searchFilter
     property var filteredLogs: {
-        var raw = backend.logs || []
+        var raw = (backend && backend.logs) ? backend.logs : []
         var lvl = root.levelFilter
         var srch = root.searchFilter
         var result = []
         for (var i = 0; i < raw.length; i++) {
             var l = raw[i]
-            if (lvl !== "ALL") {
-                if (lvl === "WARN" && l.level !== "WARN" && l.level !== "WARNING") continue
-                if (lvl !== "WARN" && l.level !== lvl) continue
+            if (l) {
+                if (lvl !== "ALL") {
+                    if (lvl === "WARN" && l.level !== "WARN" && l.level !== "WARNING") continue
+                    if (lvl !== "WARN" && l.level !== lvl) continue
+                }
+                if (srch && (!l.message || l.message.toLowerCase().indexOf(srch) === -1)) continue
+                result.push(l)
             }
-            if (srch && (!l.message || l.message.toLowerCase().indexOf(srch) === -1)) continue
-            result.push(l)
         }
         return result
     }
@@ -162,15 +164,17 @@ Item {
 
                 delegate: Rectangle {
                     width: logListView.width - 12
-                    implicitHeight: logRow.implicitHeight + 8
+                    implicitHeight: logRow.implicitHeight + 10
                     color: index % 2 === 0 ? "transparent" : "#080C14"
                     radius: 3
 
                     RowLayout {
                         id: logRow
-                        width: parent.width - 16
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        anchors.topMargin: 5
+                        anchors.bottomMargin: 5
                         spacing: Theme.spacingSm
 
                         Text {
@@ -178,7 +182,7 @@ Item {
                             font.family: Theme.monoFontFamily
                             font.pixelSize: Theme.fontSizeXs
                             color: Theme.textMuted
-                            Layout.alignment: Qt.AlignVCenter
+                            Layout.alignment: Qt.AlignTop
                         }
 
                         Rectangle {
@@ -186,7 +190,7 @@ Item {
                             implicitHeight: 18
                             radius: 3
                             color: root.getTagBg(modelData.level)
-                            Layout.alignment: Qt.AlignVCenter
+                            Layout.alignment: Qt.AlignTop
 
                             Text {
                                 anchors.centerIn: parent
@@ -205,7 +209,7 @@ Item {
                             font.pixelSize: Theme.fontSizeXs
                             color: root.getMessageColor(modelData.level)
                             wrapMode: Text.WrapAnywhere
-                            Layout.alignment: Qt.AlignVCenter
+                            Layout.alignment: Qt.AlignTop
                         }
                     }
                 }

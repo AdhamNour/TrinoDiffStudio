@@ -11,13 +11,13 @@ Item {
     property string searchFilter: ""
 
     property var filteredTables: {
-        var raw = backend.tables || []
+        var raw = (backend && backend.tables) ? backend.tables : []
         var filter = root.searchFilter
         if (!filter) return raw
         var res = []
         for (var i = 0; i < raw.length; i++) {
             var t = raw[i]
-            if (t.table_name && t.table_name.toLowerCase().indexOf(filter) !== -1)
+            if (t && t.table_name && t.table_name.toLowerCase().indexOf(filter) !== -1)
                 res.push(t)
         }
         return res
@@ -82,7 +82,7 @@ Item {
                         AppTextField {
                             id: excelPathField
                             Layout.fillWidth: true
-                            text: backend.config.excel_path || ""
+                            text: (backend && backend.config) ? (backend.config.excel_path || "") : ""
                             placeholderText: "Path to Business Columns Excel mapping..."
                             readOnly: true
                         }
@@ -117,9 +117,11 @@ Item {
                     id: sourceCatCombo
                     Layout.preferredWidth: 155
                     label: "Source Catalog"
-                    model: backend.catalogs
-                    currentIndex: Math.max(0, backend.catalogs.indexOf(backend.config.source_catalog || "postgres"))
-                    onActivated: (index) => backend.config["source_catalog"] = currentText
+                    model: (backend && backend.catalogs) ? backend.catalogs : ["postgres", "oracle"]
+                    currentIndex: Math.max(0, (backend && backend.catalogs ? backend.catalogs : []).indexOf(backend && backend.config ? (backend.config.source_catalog || "postgres") : "postgres"))
+                    onActivated: (index) => {
+                        if (backend && backend.config) backend.config["source_catalog"] = currentText
+                    }
                 }
 
                 // Target catalog
@@ -127,12 +129,16 @@ Item {
                     id: targetCatCombo
                     Layout.preferredWidth: 155
                     label: "Target Catalog"
-                    model: backend.catalogs
+                    model: (backend && backend.catalogs) ? backend.catalogs : ["postgres", "oracle"]
                     currentIndex: {
-                        var idx = backend.catalogs.indexOf(backend.config.target_catalog || "oracle")
-                        return idx >= 0 ? idx : (backend.catalogs.length > 1 ? 1 : 0)
+                        var cats = (backend && backend.catalogs) ? backend.catalogs : []
+                        var targetCat = (backend && backend.config) ? (backend.config.target_catalog || "oracle") : "oracle"
+                        var idx = cats.indexOf(targetCat)
+                        return idx >= 0 ? idx : (cats.length > 1 ? 1 : 0)
                     }
-                    onActivated: (index) => backend.config["target_catalog"] = currentText
+                    onActivated: (index) => {
+                        if (backend && backend.config) backend.config["target_catalog"] = currentText
+                    }
                 }
 
                 AppButton {
@@ -160,11 +166,30 @@ Item {
             }
 
             Text {
-                text: getSelectedCount() + " / " + backend.tables.length + " selected"
+                text: getSelectedCount() + " / " + (backend && backend.tables ? backend.tables.length : 0) + " selected"
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeSm
                 color: Theme.textSecondary
                 verticalAlignment: Text.AlignVCenter
+            }
+
+            Rectangle {
+                visible: backend ? (backend.currentBatchId !== "") : false
+                implicitWidth: batchChipText.implicitWidth + 16
+                implicitHeight: 24
+                radius: Theme.radiusSm
+                color: (backend && backend.isRunning) ? "#1E3A8A" : "#1A2540"
+                border.color: (backend && backend.isRunning) ? Theme.accentCyan : Theme.border
+                border.width: 1
+
+                Text {
+                    id: batchChipText
+                    anchors.centerIn: parent
+                    text: (backend && backend.isRunning ? "⚡ " : "📦 ") + (backend ? backend.currentBatchId : "")
+                    font.family: Theme.monoFontFamily
+                    font.pixelSize: Theme.fontSizeXs
+                    color: (backend && backend.isRunning) ? Theme.accentCyan : Theme.textSecondary
+                }
             }
 
             Item { Layout.fillWidth: true }
@@ -184,19 +209,19 @@ Item {
             }
 
             AppButton {
-                text: backend.isRunning ? "⬛  Stop" : "▶  Run Selected"
-                variant: backend.isRunning ? "danger" : "primary"
+                text: (backend && backend.isRunning) ? "⬛  Stop" : "▶  Run Selected"
+                variant: (backend && backend.isRunning) ? "danger" : "primary"
                 implicitHeight: 36
-                enabled: backend.isRunning || getSelectedCount() > 0
-                onClicked: backend.isRunning ? backend.stopBatch() : backend.startBatch(true)
+                enabled: (backend && backend.isRunning) || getSelectedCount() > 0
+                onClicked: (backend && backend.isRunning) ? backend.stopBatch() : backend.startBatch(true)
             }
 
             AppButton {
                 text: "▶▶  Run All"
                 variant: "success"
                 implicitHeight: 36
-                visible: !backend.isRunning
-                enabled: backend.tables.length > 0
+                visible: !backend || !backend.isRunning
+                enabled: backend && backend.tables && backend.tables.length > 0
                 onClicked: backend.startBatch(false)
             }
         }
@@ -250,8 +275,8 @@ Item {
                         // Table name + id-column count
                         Column {
                             Layout.preferredWidth: 240
+                            Layout.alignment: Qt.AlignVCenter
                             spacing: 2
-                            anchors.verticalCenter: parent.verticalCenter
 
                             Text {
                                 text: modelData.table_name
@@ -274,15 +299,16 @@ Item {
                         // ID column chip tags
                         Row {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.alignment: Qt.AlignVCenter
                             spacing: 5
                             clip: true
-                            anchors.verticalCenter: parent.verticalCenter
 
                             Repeater {
                                 model: modelData.id_columns ? modelData.id_columns.slice(0, 4) : []
 
                                 delegate: Rectangle {
-                                    required property string modelData
+                                    required property var modelData
                                     implicitWidth:  chipLabel.implicitWidth + 12
                                     implicitHeight: 22
                                     radius: 4
@@ -293,7 +319,7 @@ Item {
                                     Text {
                                         id: chipLabel
                                         anchors.centerIn: parent
-                                        text: modelData
+                                        text: typeof modelData === "string" ? modelData : String(modelData)
                                         font.family: Theme.monoFontFamily
                                         font.pixelSize: 10
                                         color: Theme.accentCyan
@@ -320,7 +346,7 @@ Item {
                             color:  modelData.diff_count > 0 ? "#4D2000" : "#003322"
                             border.color: modelData.diff_count > 0 ? "#F59E0B" : "#10B981"
                             border.width: 1
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.alignment: Qt.AlignVCenter
 
                             Text {
                                 id: diffLbl
@@ -336,7 +362,7 @@ Item {
                         // Status badge
                         StatusBadge {
                             status: modelData.status || "Ready"
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.alignment: Qt.AlignVCenter
                         }
 
                         // AI Fix button (shown for failing tables when AI is enabled)
@@ -346,7 +372,8 @@ Item {
                             variant: modelData.ai_status === "Ready" ? "primary" : "danger"
                             implicitHeight: 28
                             customPaddingH: 8
-                            visible: (backend.config.enable_ai_diagnosis !== false) && modelData.status === "Error"
+                            visible: (backend && backend.config && backend.config.enable_ai_diagnosis !== false) && modelData.status === "Error"
+                            Layout.alignment: Qt.AlignVCenter
                             ToolTip.visible: hovered
                             ToolTip.text: modelData.ai_status === "Ready"
                                           ? "AI diagnosis and SQL fix are ready! Click to view."
@@ -362,6 +389,7 @@ Item {
                             variant: "ghost"
                             implicitHeight: 28
                             customPaddingH: 8
+                            Layout.alignment: Qt.AlignVCenter
                             onClicked: {
                                 backend.generateSqlPreview(
                                     modelData.table_name,
@@ -378,7 +406,8 @@ Item {
                             variant: "secondary"
                             implicitHeight: 28
                             customPaddingH: 10
-                            enabled: !backend.isRunning
+                            enabled: !backend || !backend.isRunning
+                            Layout.alignment: Qt.AlignVCenter
                             onClicked: {
                                 backend.runSingleTable(
                                     modelData.table_name,
@@ -397,7 +426,7 @@ Item {
             Column {
                 anchors.centerIn: parent
                 spacing: Theme.spacingMd
-                visible: backend.tables.length === 0
+                visible: !backend || !backend.tables || backend.tables.length === 0
 
                 Text {
                     text: "📊  No Tables Loaded"
@@ -427,18 +456,20 @@ Item {
 
     // ── Helper functions ───────────────────────────────────────────────────
     function getSelectedCount() {
+        if (!backend || !backend.tables) return 0
         var n = 0
         for (var i = 0; i < backend.tables.length; i++)
-            if (backend.tables[i].selected) n++
+            if (backend.tables[i] && backend.tables[i].selected) n++
         return n
     }
 
     function getFilteredTables() {
+        if (!backend || !backend.tables) return []
         if (!root.searchFilter) return backend.tables
         var res = []
         for (var i = 0; i < backend.tables.length; i++) {
             var t = backend.tables[i]
-            if (t.table_name.toLowerCase().indexOf(root.searchFilter) !== -1)
+            if (t && t.table_name && t.table_name.toLowerCase().indexOf(root.searchFilter) !== -1)
                 res.push(t)
         }
         return res

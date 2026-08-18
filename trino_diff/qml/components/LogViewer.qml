@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Layouts
 import ".."
 
 // LogViewer lives inside components/ so:
@@ -17,15 +18,15 @@ Rectangle {
     border.color: Theme.border
     border.width: 1
 
-    Column {
+    ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.spacingSm
         spacing: Theme.spacingSm
 
         // Toolbar row
-        Row {
-            width: parent.width
-            height: 32
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 32
             spacing: Theme.spacingSm
 
             Text {
@@ -34,18 +35,18 @@ Rectangle {
                 font.pixelSize: Theme.fontSizeSm
                 font.weight: Font.DemiBold
                 color: Theme.textSecondary
-                anchors.verticalCenter: parent.verticalCenter
+                Layout.alignment: Qt.AlignVCenter
             }
 
-            Item { width: parent.width - 130; height: 1 }
+            Item { Layout.fillWidth: true }
 
-            // Inline clear button so we don't need to import AppButton
+            // Inline clear button
             Rectangle {
-                width: clearBtnLabel.implicitWidth + 16
-                height: 26
+                implicitWidth: clearBtnLabel.implicitWidth + 16
+                implicitHeight: 26
                 radius: Theme.radiusSm
                 color: clearBtnMa.containsMouse ? Theme.bgInput : "transparent"
-                anchors.verticalCenter: parent.verticalCenter
+                Layout.alignment: Qt.AlignVCenter
 
                 Text {
                     id: clearBtnLabel
@@ -69,27 +70,29 @@ Rectangle {
         // Log list
         ScrollView {
             id: scrollView
-            width: parent.width
-            height: parent.height - 40
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             clip: true
 
             ListView {
                 id: logList
-                width: scrollView.width
+                width: scrollView.availableWidth
                 model: root.logsModel
                 spacing: 2
 
                 delegate: Rectangle {
                     width: logList.width
-                    implicitHeight: logContentRow.implicitHeight + 6
+                    implicitHeight: logContentRow.implicitHeight + 8
                     color: index % 2 === 0 ? "transparent" : "#080C14"
                     radius: 2
 
-                    Row {
+                    RowLayout {
                         id: logContentRow
-                        width: parent.width - 12
-                        x: 6
-                        y: 3
+                        anchors.fill: parent
+                        anchors.leftMargin: 8
+                        anchors.rightMargin: 8
+                        anchors.topMargin: 4
+                        anchors.bottomMargin: 4
                         spacing: Theme.spacingSm
 
                         Text {
@@ -97,15 +100,15 @@ Rectangle {
                             font.family: Theme.monoFontFamily
                             font.pixelSize: Theme.fontSizeXs
                             color: Theme.textMuted
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.alignment: Qt.AlignTop
                         }
 
                         Rectangle {
-                            width: 56
-                            height: 16
+                            implicitWidth: 56
+                            implicitHeight: 18
                             radius: 3
                             color: getTagBg(modelData.level)
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.alignment: Qt.AlignTop
 
                             Text {
                                 anchors.centerIn: parent
@@ -123,8 +126,8 @@ Rectangle {
                             font.pixelSize: Theme.fontSizeXs
                             color: getMessageColor(modelData.level)
                             wrapMode: Text.WrapAnywhere
-                            width: logContentRow.width - 130
-                            anchors.verticalCenter: parent.verticalCenter
+                            Layout.fillWidth: true
+                            Layout.alignment: Qt.AlignTop
                         }
                     }
                 }

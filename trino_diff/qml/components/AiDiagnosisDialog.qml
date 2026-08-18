@@ -17,9 +17,10 @@ Dialog {
 
     title: ""
     modal: true
-    anchors.centerIn: Overlay.overlay
-    width:  Math.min(Overlay.overlay ? Overlay.overlay.width  * 0.88 : 940, 960)
-    height: Math.min(Overlay.overlay ? Overlay.overlay.height * 0.88 : 720, 740)
+    x: Math.round((parent.width - width) / 2)
+    y: Math.round((parent.height - height) / 2)
+    width:  Math.min(parent ? parent.width * 0.88 : 940, 960)
+    height: Math.min(parent ? parent.height * 0.88 : 720, 740)
     padding: 0
 
     background: Rectangle {
@@ -67,7 +68,7 @@ Dialog {
                     }
 
                     Text {
-                        text: "Powered by " + (backend.config.ollama_model || "Qwen 2.5 Coder") + "  •  Effort: " + (backend.config.ai_effort || "High") + "  •  Table: " + root.tableName
+                        text: "Powered by " + ((backend && backend.config) ? (backend.config.ollama_model || "Qwen 2.5 Coder") : "Qwen 2.5 Coder") + "  •  Effort: " + ((backend && backend.config) ? (backend.config.ai_effort || "High") : "High") + "  •  Table: " + root.tableName
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeXs
                         color: Theme.accentCyan
@@ -386,7 +387,7 @@ Dialog {
                             spacing: Theme.spacingMd
 
                             Text {
-                                text: "Exact Prompt Sent to AI (" + (backend.config.ollama_model || "Ollama") + "):"
+                                text: "Exact Prompt Sent to AI (" + ((backend && backend.config) ? (backend.config.ollama_model || "Ollama") : "Ollama") + "):"
                                 font.family: Theme.fontFamily
                                 font.pixelSize: Theme.fontSizeSm
                                 font.weight: Font.DemiBold

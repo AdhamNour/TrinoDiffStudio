@@ -17,5 +17,6 @@
     "ollama_url": "http://localhost:11434",
     "ollama_model": "qwen2.5-coder:0.5b",
     "ai_effort": "High",
-    "auto_ai_diagnosis": true
+    "auto_ai_diagnosis": true,
+    "test_sqlite_flag": true
 }

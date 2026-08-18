@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import threading
+import urllib.parse
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread
 
@@ -15,6 +16,7 @@ from trino_diff.backend.excel_loader import load_tables_from_excel
 from trino_diff.backend.worker import TrinoDiffWorker
 from trino_diff.backend.notifier import WindowsNotifier
 from trino_diff.backend.ollama_client import query_ollama, extract_sql_from_response, test_ollama_connection
+from trino_diff.backend.db_manager import DatabaseManager
 import generate_trino_diff
 
 
@@ -28,6 +30,8 @@ class BackendController(QObject):
     tablesChanged = Signal()
     logsChanged = Signal()
     outputFilesChanged = Signal()
+    batchesChanged = Signal()
+    currentBatchIdChanged = Signal()
     configChanged = Signal()
     runningStateChanged = Signal()
     progressChanged = Signal()
@@ -41,12 +45,16 @@ class BackendController(QObject):
 
     def __init__(self):
         super().__init__()
+        self.db = DatabaseManager()
         self._config = load_config()
         self._notifier = WindowsNotifier()
         self._catalogs = ["postgres", "oracle"]
         self._tables = []
         self._logs = []
         self._output_files = []
+        self._batches = self.db.get_batches_list()
+        self._current_batch_id = ""
+        self._selected_batch_filter = ""
         self._table_errors = {}
         self._is_running = False
         self._progress_val = 0
@@ -87,6 +95,14 @@ class BackendController(QObject):
     @Property(list, notify=outputFilesChanged)
     def outputFiles(self):
         return self._output_files
+
+    @Property(list, notify=batchesChanged)
+    def batches(self):
+        return self._batches
+
+    @Property(str, notify=currentBatchIdChanged)
+    def currentBatchId(self):
+        return self._current_batch_id
 
     @Property(dict, notify=configChanged)
     def config(self):
@@ -175,8 +191,8 @@ class BackendController(QObject):
 
     @Slot(str)
     def loadExcel(self, file_path: str):
-        # Remove file:/// URL prefix if passed from QML FileDialog
-        clean_path = file_path.replace("file:///", "").replace("file://", "")
+        # Remove file:/// URL prefix if passed from QML FileDialog and decode %20 spaces
+        clean_path = urllib.parse.unquote(file_path).replace("file:///", "").replace("file://", "")
         if sys.platform == "win32" and clean_path.startswith("/") and len(clean_path) > 2 and clean_path[2] == ":":
             clean_path = clean_path[1:]
 
@@ -232,13 +248,16 @@ class BackendController(QObject):
         self._progress_val = 0
         self._progress_max = len(tasks)
         self._status_text = f"Processing 0/{len(tasks)} tables..."
+        batch_id = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self._current_batch_id = batch_id
+        self.currentBatchIdChanged.emit()
         self.runningStateChanged.emit()
         self.progressChanged.emit()
         self.statusTextChanged.emit()
 
         # Create worker & thread
         self._worker_thread = QThread()
-        self._worker = TrinoDiffWorker(tasks, self._config)
+        self._worker = TrinoDiffWorker(tasks, self._config, batch_id=batch_id, batch_type="BATCH")
         self._worker.moveToThread(self._worker_thread)
 
         self._worker.logEmitted.connect(self.appendLog)
@@ -278,6 +297,10 @@ class BackendController(QObject):
         if target_cat:
             cfg_copy["target_catalog"] = target_cat
 
+        batch_id = f"ADHOC_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self._current_batch_id = batch_id
+        self.currentBatchIdChanged.emit()
+
         self._is_running = True
         self._progress_val = 0
         self._progress_max = 1
@@ -287,7 +310,7 @@ class BackendController(QObject):
         self.statusTextChanged.emit()
 
         self._worker_thread = QThread()
-        self._worker = TrinoDiffWorker([task], cfg_copy)
+        self._worker = TrinoDiffWorker([task], cfg_copy, batch_id=batch_id, batch_type="ADHOC")
         self._worker.moveToThread(self._worker_thread)
 
         self._worker.logEmitted.connect(self.appendLog)
@@ -374,14 +397,18 @@ class BackendController(QObject):
                 )
 
     def _onWorkerTableFinished(self, table_name: str, sql_file: str, xlsx_file: str):
-        self.refreshOutputFiles()
+        self.refreshOutputFiles(self._selected_batch_filter)
 
     def _onWorkerAllFinished(self, success_cnt: int, error_cnt: int):
         self._is_running = False
         self._status_text = f"Finished: {success_cnt} succeeded, {error_cnt} failed"
         self.runningStateChanged.emit()
         self.statusTextChanged.emit()
-        self.refreshOutputFiles()
+
+        # Refresh batches from SQLite and reload output files
+        self._batches = self.db.get_batches_list()
+        self.batchesChanged.emit()
+        self.refreshOutputFiles(self._selected_batch_filter)
 
         if self._worker_thread:
             self._worker_thread.quit()
@@ -484,12 +511,38 @@ class BackendController(QObject):
             self._notifier.notify("SQL Preview Failed", f"Could not generate SQL preview for {clean_table}: {e}", level="error")
 
     # -----------------------------------------------------------------------
-    # Output Files Management
+    # Output Files & Batch History Management
     # -----------------------------------------------------------------------
 
+    @Slot(str)
+    def filterOutputByBatch(self, batch_id: str):
+        self._selected_batch_filter = batch_id.strip() if batch_id and batch_id != "ALL" else ""
+        self.refreshOutputFiles(self._selected_batch_filter)
+
+    @Slot(result=list)
+    def getBatchesList(self) -> list:
+        self._batches = self.db.get_batches_list()
+        self.batchesChanged.emit()
+        return self._batches
+
+    @Slot(str, result='QVariantMap')
+    def getBatchDetails(self, batch_id: str) -> dict:
+        return self.db.get_batch_details(batch_id) or {}
+
     @Slot()
-    def refreshOutputFiles(self):
+    @Slot(str)
+    def refreshOutputFiles(self, batch_id: str = ""):
         output_dir = self._config.get("output_dir", os.path.join(PROJECT_ROOT, "output"))
+        clean_batch_id = batch_id.strip() if batch_id and batch_id != "ALL" else self._selected_batch_filter
+
+        # If a specific batch is requested, query SQLite output_files directly
+        if clean_batch_id:
+            files = self.db.get_output_files_by_batch(clean_batch_id)
+            self._output_files = files
+            self.outputFilesChanged.emit()
+            return
+
+        # Otherwise, scan disk directory and synchronize with SQLite
         files = []
         if os.path.exists(output_dir):
             for fn in sorted(os.listdir(output_dir), reverse=True):
@@ -506,6 +559,10 @@ class BackendController(QObject):
                             ftype = "Parquet"
                         else:
                             ftype = "SQL"
+
+                        # Index into SQLite if missing
+                        self.db.record_output_file(None, None, fp, ftype)
+
                         files.append({
                             "name": fn,
                             "path": fp,
@@ -513,17 +570,24 @@ class BackendController(QObject):
                             "size": f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 1)} MB",
                             "modified": mod_time,
                         })
+
         self._output_files = files
         self.outputFilesChanged.emit()
+        self._batches = self.db.get_batches_list()
+        self.batchesChanged.emit()
 
     @Slot(str)
     def openFile(self, path: str):
-        if not os.path.exists(path):
-            self.notificationEmitted.emit("error", f"File not found: {path}")
-            self._notifier.notify("File Not Found", f"Could not find file: {path}", level="error")
+        clean_path = urllib.parse.unquote(path).replace("file:///", "").replace("file://", "")
+        if sys.platform == "win32" and clean_path.startswith("/") and len(clean_path) > 2 and clean_path[2] == ":":
+            clean_path = clean_path[1:]
+
+        if not os.path.exists(clean_path):
+            self.notificationEmitted.emit("error", f"File not found: {clean_path}")
+            self._notifier.notify("File Not Found", f"Could not find file: {clean_path}", level="error")
             return
         try:
-            ext = os.path.splitext(path)[1].lower()
+            ext = os.path.splitext(clean_path)[1].lower()
             if sys.platform == "win32":
                 if ext == ".sql":
                     # Prefer Notepad++, fallback to standard Notepad
@@ -544,22 +608,26 @@ class BackendController(QObject):
                                 break
 
                     if npp_path:
-                        subprocess.Popen([npp_path, path])
+                        subprocess.Popen([npp_path, clean_path])
                     else:
-                        subprocess.Popen(["notepad.exe", path])
+                        subprocess.Popen(["notepad.exe", clean_path])
                 else:
-                    os.startfile(path)
+                    os.startfile(clean_path)
             elif sys.platform == "darwin":
-                subprocess.run(["open", path])
+                subprocess.run(["open", clean_path])
             else:
-                subprocess.run(["xdg-open", path])
+                subprocess.run(["xdg-open", clean_path])
         except Exception as e:
             self.notificationEmitted.emit("error", f"Could not open file: {e}")
-            self._notifier.notify("Open File Failed", f"Could not open {os.path.basename(path)}: {e}", level="error")
+            self._notifier.notify("Open File Failed", f"Could not open {os.path.basename(clean_path)}: {e}", level="error")
 
     @Slot(str)
     def openFolder(self, path: str):
-        folder = path if os.path.isdir(path) else os.path.dirname(path)
+        clean_path = urllib.parse.unquote(path).replace("file:///", "").replace("file://", "")
+        if sys.platform == "win32" and clean_path.startswith("/") and len(clean_path) > 2 and clean_path[2] == ":":
+            clean_path = clean_path[1:]
+
+        folder = clean_path if os.path.isdir(clean_path) else os.path.dirname(clean_path)
         if not os.path.exists(folder):
             os.makedirs(folder, exist_ok=True)
         try:
@@ -574,10 +642,14 @@ class BackendController(QObject):
 
     @Slot(str)
     def deleteOutputFile(self, path: str):
-        if os.path.exists(path):
+        clean_path = urllib.parse.unquote(path).replace("file:///", "").replace("file://", "")
+        if sys.platform == "win32" and clean_path.startswith("/") and len(clean_path) > 2 and clean_path[2] == ":":
+            clean_path = clean_path[1:]
+
+        if os.path.exists(clean_path):
             try:
-                os.remove(path)
-                self.appendLog("INFO", f"Deleted: {os.path.basename(path)}")
+                os.remove(clean_path)
+                self.appendLog("INFO", f"Deleted: {os.path.basename(clean_path)}")
                 self.refreshOutputFiles()
             except Exception as e:
                 self.notificationEmitted.emit("error", f"Could not delete file: {e}")

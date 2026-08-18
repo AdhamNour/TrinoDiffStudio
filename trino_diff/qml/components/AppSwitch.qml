@@ -21,7 +21,7 @@ Switch {
         implicitWidth: 42
         implicitHeight: 24
         x: control.leftPadding
-        anchors.verticalCenter: parent.verticalCenter
+        y: control.topPadding + Math.round((control.availableHeight - height) / 2)
         radius: 12
 
         color: !control.enabled ? Theme.borderSubtle

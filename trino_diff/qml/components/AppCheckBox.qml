@@ -20,7 +20,7 @@ CheckBox {
         implicitWidth: 18
         implicitHeight: 18
         x: control.leftPadding
-        anchors.verticalCenter: parent.verticalCenter
+        y: control.topPadding + Math.round((control.availableHeight - height) / 2)
         radius: Theme.radiusSm - 2
         color: !control.enabled ? Theme.bgCard
              : control.checked ? (control.down ? Theme.primaryActive : (control.hovered ? Theme.primaryHover : Theme.primary))

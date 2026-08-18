@@ -12,32 +12,44 @@ Button {
     property int customPaddingV: Theme.spacingSm
     property bool fullWidth: false
 
-    implicitWidth: fullWidth ? parent.width : (contentRow.implicitWidth + customPaddingH * 2)
+    implicitWidth: Math.max(32, contentRow.implicitWidth + customPaddingH * 2)
     implicitHeight: 36
+    padding: 0
 
     font.family: Theme.fontFamily
     font.pixelSize: Theme.fontSizeBase
     font.weight: Font.Medium
 
-    contentItem: Row {
-        id: contentRow
-        spacing: Theme.spacingSm
-        anchors.centerIn: parent
+    MouseArea {
+        anchors.fill: parent
+        cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+        acceptedButtons: Qt.NoButton
+    }
 
-        Text {
-            visible: root.iconName !== ""
-            text: root.iconName
-            font.family: Theme.fontFamily
-            font.pixelSize: Theme.fontSizeMd
-            color: root.getTextColor()
-            anchors.verticalCenter: parent.verticalCenter
-        }
+    contentItem: Item {
+        implicitWidth: contentRow.implicitWidth
+        implicitHeight: contentRow.implicitHeight
 
-        Text {
-            text: root.text
-            font: root.font
-            color: root.getTextColor()
-            anchors.verticalCenter: parent.verticalCenter
+        Row {
+            id: contentRow
+            spacing: Theme.spacingSm
+            anchors.centerIn: parent
+
+            Text {
+                visible: root.iconName !== ""
+                text: root.iconName
+                font.family: Theme.fontFamily
+                font.pixelSize: Theme.fontSizeMd
+                color: root.getTextColor()
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+                text: root.text
+                font: root.font
+                color: root.getTextColor()
+                anchors.verticalCenter: parent.verticalCenter
+            }
         }
     }
 

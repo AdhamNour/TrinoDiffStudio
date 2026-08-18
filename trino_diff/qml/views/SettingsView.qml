@@ -17,7 +17,7 @@ Item {
         id: folderDialog
         title: "Select Output Directory"
         onAccepted: {
-            var raw = folderDialog.selectedFolder.toString()
+            var raw = decodeURIComponent(folderDialog.selectedFolder.toString())
             // Strip file:/// prefix; on Windows the path will look like /C:/Users/...
             raw = raw.replace(/^file:\/\/\//, "").replace(/^file:\/\//, "")
             // Remove leading slash before drive letter on Windows: /C:/ → C:/
@@ -36,12 +36,13 @@ Item {
     }
 
     ScrollView {
+        id: settingsScroll
         anchors.fill: parent
         anchors.margins: Theme.spacingLg
         clip: true
 
         ColumnLayout {
-            width: root.width - Theme.spacingLg * 2
+            width: settingsScroll.availableWidth
             spacing: Theme.spacingLg
 
             // ── Header ──────────────────────────────────────────────────
@@ -110,21 +111,21 @@ Item {
                             id: hostField
                             Layout.fillWidth: true
                             label: "Host"
-                            text: backend.config.trino_host || "localhost"
+                            text: (backend && backend.config) ? (backend.config.trino_host || "localhost") : "localhost"
                         }
 
                         AppTextField {
                             id: portField
                             Layout.preferredWidth: 130
                             label: "Port"
-                            text: String(backend.config.trino_port || 8080)
+                            text: String((backend && backend.config) ? (backend.config.trino_port || 8080) : 8080)
                         }
 
                         AppTextField {
                             id: userField
                             Layout.preferredWidth: 150
                             label: "User"
-                            text: backend.config.trino_user || "admin"
+                            text: (backend && backend.config) ? (backend.config.trino_user || "admin") : "admin"
                         }
 
                         AppComboBox {
@@ -132,7 +133,7 @@ Item {
                             Layout.preferredWidth: 110
                             label: "Scheme"
                             model: ["http", "https"]
-                            currentIndex: backend.config.http_scheme === "https" ? 1 : 0
+                            currentIndex: (backend && backend.config && backend.config.http_scheme === "https") ? 1 : 0
                         }
                     }
 
@@ -148,7 +149,7 @@ Item {
                             enabled: !root.isTesting
                             onClicked: {
                                 root.isTesting  = true
-                                root.testResult = backend.testConnection()
+                                root.testResult = backend ? backend.testConnection() : "ERROR: backend unavailable"
                                 root.isTesting  = false
                             }
                         }
@@ -165,7 +166,7 @@ Item {
                     Rectangle { width: parent.width; height: 1; color: Theme.border }
 
                     Text {
-                        text: "Available catalogs: " + backend.catalogs.join(", ")
+                        text: "Available catalogs: " + ((backend && backend.catalogs) ? backend.catalogs.join(", ") : "")
                         font.family: Theme.monoFontFamily
                         font.pixelSize: Theme.fontSizeXs
                         color: Theme.accentCyan
@@ -219,18 +220,20 @@ Item {
                             id: defaultSourceCatCombo
                             Layout.fillWidth: true
                             label: "Default Source Catalog"
-                            model: backend.catalogs
-                            currentIndex: Math.max(0, backend.catalogs.indexOf(backend.config.source_catalog || "postgres"))
+                            model: (backend && backend.catalogs) ? backend.catalogs : ["postgres", "oracle"]
+                            currentIndex: Math.max(0, (backend && backend.catalogs ? backend.catalogs : []).indexOf(backend && backend.config ? (backend.config.source_catalog || "postgres") : "postgres"))
                         }
 
                         AppComboBox {
                             id: defaultTargetCatCombo
                             Layout.fillWidth: true
                             label: "Default Target Catalog"
-                            model: backend.catalogs
+                            model: (backend && backend.catalogs) ? backend.catalogs : ["postgres", "oracle"]
                             currentIndex: {
-                                var idx = backend.catalogs.indexOf(backend.config.target_catalog || "oracle")
-                                return idx >= 0 ? idx : (backend.catalogs.length > 1 ? 1 : 0)
+                                var cats = (backend && backend.catalogs) ? backend.catalogs : []
+                                var targetCat = (backend && backend.config) ? (backend.config.target_catalog || "oracle") : "oracle"
+                                var idx = cats.indexOf(targetCat)
+                                return idx >= 0 ? idx : (cats.length > 1 ? 1 : 0)
                             }
                         }
                     }
@@ -243,14 +246,14 @@ Item {
                             id: excludeColsField
                             Layout.fillWidth: true
                             label: "Excluded Columns (comma-separated)"
-                            text: backend.config.exclude_columns || "extraction_timestamp"
+                            text: (backend && backend.config) ? (backend.config.exclude_columns || "extraction_timestamp") : "extraction_timestamp"
                         }
 
                         AppTextField {
                             id: excludeSuffixField
                             Layout.preferredWidth: 190
                             label: "Excluded Column Suffix"
-                            text: backend.config.exclude_suffix || "key"
+                            text: (backend && backend.config) ? (backend.config.exclude_suffix || "key") : "key"
                         }
                     }
 
@@ -262,7 +265,7 @@ Item {
                             id: outputDirField
                             Layout.fillWidth: true
                             label: "Output Directory"
-                            text: backend.config.output_dir || "output"
+                            text: (backend && backend.config) ? (backend.config.output_dir || "output") : "output"
                         }
 
                         AppButton {
@@ -276,7 +279,7 @@ Item {
 
                     AppCheckBox {
                         id: trimStringsCheck
-                        checked: backend.config.trim_strings !== false
+                        checked: (backend && backend.config) ? (backend.config.trim_strings !== false) : true
                         text: "Trim strings (removes trailing whitespace from Oracle CHAR columns)"
                     }
 
@@ -297,13 +300,13 @@ Item {
 
                         AppCheckBox {
                             id: notifyTableCheck
-                            checked: backend.config.notify_table_complete !== false
+                            checked: (backend && backend.config) ? (backend.config.notify_table_complete !== false) : true
                             text: "Notify when each individual table diff finishes"
                         }
 
                         AppCheckBox {
                             id: notifyBatchCheck
-                            checked: backend.config.notify_batch_complete !== false
+                            checked: (backend && backend.config) ? (backend.config.notify_batch_complete !== false) : true
                             text: "Notify when entire batch execution completes"
                         }
                     }
@@ -355,7 +358,7 @@ Item {
 
                         AppSwitch {
                             id: enableAiSwitch
-                            checked: backend.config.enable_ai_diagnosis !== false
+                            checked: (backend && backend.config) ? (backend.config.enable_ai_diagnosis !== false) : true
                             text: checked ? "AI Enabled" : "AI Disabled"
                         }
                     }
@@ -379,7 +382,7 @@ Item {
                                 id: ollamaUrlField
                                 Layout.fillWidth: true
                                 label: "Ollama API URL"
-                                text: backend.config.ollama_url || "http://localhost:11434"
+                                text: (backend && backend.config) ? (backend.config.ollama_url || "http://localhost:11434") : "http://localhost:11434"
                                 placeholderText: "http://localhost:11434"
                             }
 
@@ -387,7 +390,7 @@ Item {
                                 id: ollamaModelField
                                 Layout.preferredWidth: 220
                                 label: "Ollama Model"
-                                text: backend.config.ollama_model || "qwen2.5-coder:1.5b"
+                                text: (backend && backend.config) ? (backend.config.ollama_model || "qwen2.5-coder:1.5b") : "qwen2.5-coder:1.5b"
                                 placeholderText: "qwen2.5-coder:1.5b"
                             }
                         }
@@ -402,7 +405,7 @@ Item {
                                 label: "AI Reasoning & Validation Effort"
                                 model: ["High (Deep Multi-Step Self-Validation)", "Medium (Balanced Verification)", "Low (Fast Single-Pass)"]
                                 currentIndex: {
-                                    var eff = (backend.config.ai_effort || "High").toLowerCase()
+                                    var eff = ((backend && backend.config ? backend.config.ai_effort : "High") || "High").toLowerCase()
                                     if (eff.indexOf("low") !== -1) return 2
                                     if (eff.indexOf("med") !== -1) return 1
                                     return 0
@@ -448,7 +451,7 @@ Item {
 
                         AppCheckBox {
                             id: autoAiCheck
-                            checked: backend.config.auto_ai_diagnosis !== false
+                            checked: (backend && backend.config) ? (backend.config.auto_ai_diagnosis !== false) : true
                             text: "Auto-diagnose Trino errors in background with AI during batch execution"
                         }
                     }

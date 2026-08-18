@@ -379,6 +379,33 @@ Item {
                         width: parent.width
                         spacing: Theme.spacingMd
 
+                        AppComboBox {
+                            id: aiEffortCombo
+                            Layout.fillWidth: true
+                            label: "AI Reasoning & Validation Effort"
+                            model: ["High (Deep Multi-Step Self-Validation)", "Medium (Balanced Verification)", "Low (Fast Single-Pass)"]
+                            currentIndex: {
+                                var eff = (backend.config.ai_effort || "High").toLowerCase()
+                                if (eff.indexOf("low") !== -1) return 2
+                                if (eff.indexOf("med") !== -1) return 1
+                                return 0
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "💡 High effort instructs the AI to perform an exhaustive multi-point self-validation checklist (type casting audit, syntax verification, schema qualifiers) before outputting the corrected SQL."
+                        font.family: Theme.fontFamily
+                        font.pixelSize: Theme.fontSizeXs
+                        color: Theme.textMuted
+                        width: parent.width
+                        wrapMode: Text.WordWrap
+                    }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
                         AppButton {
                             text: root.isTestingOllama ? "Testing…" : "⚡ Test Ollama Connection"
                             variant: "primary"
@@ -424,6 +451,10 @@ Item {
                     implicitHeight: 40
                     customPaddingH: 24
                     onClicked: {
+                        var effortVal = "High"
+                        if (aiEffortCombo.currentIndex === 2) effortVal = "Low"
+                        else if (aiEffortCombo.currentIndex === 1) effortVal = "Medium"
+
                         backend.updateSettings(
                             hostField.text,
                             parseInt(portField.text) || 8080,
@@ -439,6 +470,7 @@ Item {
                             notifyBatchCheck.checked,
                             ollamaUrlField.text,
                             ollamaModelField.text,
+                            effortVal,
                             autoAiCheck.checked
                         )
                     }

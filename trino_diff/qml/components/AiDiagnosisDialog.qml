@@ -67,7 +67,7 @@ Dialog {
                     }
 
                     Text {
-                        text: "Powered by " + (backend.config.ollama_model || "Qwen 2.5 Coder") + "  •  Table: " + root.tableName
+                        text: "Powered by " + (backend.config.ollama_model || "Qwen 2.5 Coder") + "  •  Effort: " + (backend.config.ai_effort || "High") + "  •  Table: " + root.tableName
                         font.family: Theme.fontFamily
                         font.pixelSize: Theme.fontSizeXs
                         color: Theme.accentCyan
@@ -212,11 +212,12 @@ Dialog {
                             }
                         }
 
-                        // AI Output
-                        TextArea {
+                        // AI Output (Rich Markdown Rendering)
+                        TextEdit {
+                            id: aiOutputText
                             width: parent.width
-                            text: root.explanationText || "Click 'Re-analyze' to generate AI diagnosis."
-                            textFormat: TextEdit.MarkdownText
+                            text: root.renderMarkdown(root.explanationText)
+                            textFormat: TextEdit.RichText
                             readOnly: true
                             font.family: Theme.fontFamily
                             font.pixelSize: Theme.fontSizeBase
@@ -224,7 +225,6 @@ Dialog {
                             selectedTextColor: "#FFFFFF"
                             selectionColor: Theme.primary
                             wrapMode: TextEdit.Wrap
-                            background: null
                             selectByMouse: true
                         }
                     }
@@ -416,19 +416,20 @@ Dialog {
                             border.color: Theme.border
                             border.width: 1
 
-                            TextArea {
+                            TextEdit {
                                 id: promptSentText
                                 anchors.fill: parent
                                 anchors.margins: 12
-                                text: root.promptText || "-- No prompt recorded"
+                                text: root.renderMarkdown(root.promptText || "-- No prompt recorded")
+                                textFormat: TextEdit.RichText
                                 readOnly: true
-                                font.family: Theme.monoFontFamily
-                                font.pixelSize: Theme.fontSizeXs
-                                color: "#93C5FD"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeSm
+                                color: Theme.textPrimary
                                 selectionColor: Theme.primary
                                 selectedTextColor: "#FFFFFF"
                                 wrapMode: TextEdit.Wrap
-                                background: null
+                                selectByMouse: true
                             }
                         }
                     }
@@ -468,5 +469,51 @@ Dialog {
                 }
             }
         }
+    }
+
+    function renderMarkdown(md) {
+        if (!md || md.trim() === "") {
+            return "<i style='color: #64748B;'>Click 'Re-analyze' to generate AI diagnosis.</i>"
+        }
+
+        // 1. Escape raw HTML characters
+        var html = md
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+
+        // 2. Fenced Code Blocks: ```sql ... ``` or ``` ... ```
+        html = html.replace(/```(?:sql|trino|bash|json|python)?\n*([\s\S]*?)```/gi, function(match, code) {
+            return "<div style='background-color: #0F172A; border: 1px solid #334155; border-radius: 6px; padding: 10px; margin: 10px 0;'><pre style='font-family: monospace; color: #34D399; font-size: 12px; margin: 0; white-space: pre-wrap;'>" + code.trim() + "</pre></div>"
+        })
+
+        // 3. Inline Code: `code`
+        html = html.replace(/`([^`\n]+)`/g, "<code style='background-color: #1E293B; color: #38BDF8; font-family: monospace; padding: 2px 6px; border-radius: 3px; font-size: 12px;'>$1</code>")
+
+        // 4. Headers: #, ##, ###, ####
+        html = html.replace(/^#### (.*?)$/gm, "<h4 style='color: #C084FC; font-size: 13px; font-weight: bold; margin-top: 14px; margin-bottom: 4px;'>$1</h4>")
+        html = html.replace(/^### (.*?)$/gm, "<h3 style='color: #A78BFA; font-size: 15px; font-weight: bold; margin-top: 16px; margin-bottom: 6px;'>$1</h3>")
+        html = html.replace(/^## (.*?)$/gm, "<h2 style='color: #818CF8; font-size: 17px; font-weight: bold; margin-top: 18px; margin-bottom: 6px;'>$1</h2>")
+        html = html.replace(/^# (.*?)$/gm, "<h1 style='color: #60A5FA; font-size: 19px; font-weight: bold; margin-top: 20px; margin-bottom: 8px;'>$1</h1>")
+
+        // 5. Bold and Italics
+        html = html.replace(/\*\*([^*]+)\*\*/g, "<strong style='color: #F8FAFC; font-weight: bold;'>$1</strong>")
+        html = html.replace(/\*([^*]+)\*/g, "<em style='color: #CBD5E1;'>$1</em>")
+
+        // 6. Checkboxes: - [x] or - [ ]
+        html = html.replace(/^[*-] \[x\] (.*?)$/gim, "<div style='margin-left: 14px; margin-bottom: 4px; color: #34D399;'>☑ $1</div>")
+        html = html.replace(/^[*-] \[ \] (.*?)$/gim, "<div style='margin-left: 14px; margin-bottom: 4px; color: #94A3B8;'>☐ $1</div>")
+
+        // 7. Bullet Lists: - or *
+        html = html.replace(/^[*-] (.*?)$/gm, "<div style='margin-left: 14px; margin-bottom: 4px; color: #E2E8F0;'>• $1</div>")
+
+        // 8. Numbered Lists: 1. 2. etc.
+        html = html.replace(/^(\d+)\. (.*?)$/gm, "<div style='margin-left: 14px; margin-bottom: 4px; color: #E2E8F0;'><strong style='color: #A78BFA;'>$1.</strong> $2</div>")
+
+        // 9. Newlines & Paragraph Spacing
+        html = html.replace(/\n\n+/g, "<div style='height: 8px;'></div>")
+        html = html.replace(/\n/g, "<br/>")
+
+        return "<div style='color: #E2E8F0; font-size: 13px; line-height: 1.5;'>" + html + "</div>"
     }
 }

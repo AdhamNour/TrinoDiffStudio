@@ -6,14 +6,15 @@
     "source_catalog": "postgres",
     "target_catalog": "oracle",
     "default_schemas": "curated, rdm",
-    "output_dir": "C:\\Users\\anhassan\\nera_automations\\output",
+    "output_dir": "C:/Users/anhassan/Diff Analysis",
     "excel_path": "C:\\Users\\anhassan\\nera_automations\\Oracle_to_Postgre_Business_Columns 2.xlsx",
     "exclude_columns": "extraction_timestamp",
     "exclude_suffix": "key",
     "trim_strings": true,
-    "notify_table_complete": true,
+    "notify_table_complete": false,
     "notify_batch_complete": true,
     "ollama_url": "http://localhost:11434",
     "ollama_model": "qwen2.5-coder:0.5b",
+    "ai_effort": "High",
     "auto_ai_diagnosis": true
 }

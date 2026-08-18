@@ -9,12 +9,42 @@ def query_ollama(
     system: str = "",
     model: str = "qwen2.5-coder:1.5b",
     base_url: str = "http://localhost:11434",
-    timeout: int = 90
+    timeout: int = 120,
+    effort: str = "High"
 ) -> dict:
     """
     Query a local Ollama instance for text generation using /api/chat or /api/generate with system prompt.
+    Effort parameter ('Low', 'Medium', 'High') adjusts context window, prediction limit, and precision temperature.
     Returns dict with 'success': bool, 'response': str, 'error': str.
     """
+    effort_lower = (effort or "high").lower()
+    if "low" in effort_lower:
+        temperature = 0.2
+        num_predict = 1024
+        num_ctx = 4096
+        top_k = 40
+        top_p = 0.90
+    elif "med" in effort_lower:
+        temperature = 0.1
+        num_predict = 2048
+        num_ctx = 8192
+        top_k = 40
+        top_p = 0.92
+    else:  # High / Deep Multi-Step Validation
+        temperature = 0.05
+        num_predict = 4096
+        num_ctx = 16384
+        top_k = 50
+        top_p = 0.95
+
+    options = {
+        "temperature": temperature,
+        "num_predict": num_predict,
+        "num_ctx": num_ctx,
+        "top_k": top_k,
+        "top_p": top_p,
+    }
+
     # Try /api/chat first as it adheres best to instruction/coder system roles
     chat_endpoint = f"{base_url.rstrip('/')}/api/chat"
     messages = []
@@ -26,10 +56,7 @@ def query_ollama(
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {
-            "temperature": 0.1,
-            "top_p": 0.9,
-        }
+        "options": options
     }
 
     try:
@@ -56,10 +83,7 @@ def query_ollama(
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "temperature": 0.1,
-            "top_p": 0.9,
-        }
+        "options": options
     }
     if system:
         gen_payload["system"] = system

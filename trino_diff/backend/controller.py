@@ -588,6 +588,8 @@ class BackendController(QObject):
     def _runAsyncAiDiagnosis(self, table_name: str, error_msg: str, failed_query: str, notify_ui: bool = False):
         clean_name = table_name.strip()
         config_copy = self._config.copy()
+        effort = config_copy.get("ai_effort", "High")
+        effort_lower = effort.lower()
 
         if notify_ui:
             self.aiDiagnosisLoading.emit(clean_name, True)
@@ -597,13 +599,12 @@ class BackendController(QObject):
                 ollama_url = config_copy.get("ollama_url", "http://localhost:11434")
                 model = config_copy.get("ollama_model", "qwen2.5-coder:1.5b")
 
-                system_prompt = (
-                    "You are an expert Trino SQL database engineer and performance specialist. "
-                    "Your task is to diagnose Trino query failures, explain the specific root cause based strictly "
-                    "on the provided Trino error and failed query, and provide the exact corrected, executable Trino SQL query."
-                )
-
-                user_prompt = f"""### Target Table: `{clean_name}`
+                if "low" in effort_lower:
+                    system_prompt = (
+                        "You are an expert Trino SQL database engineer. "
+                        "Diagnose the Trino query error quickly and output a clean, corrected Trino SQL query."
+                    )
+                    user_prompt = f"""### Target Table: `{clean_name}`
 
 #### Trino Error Message:
 ```
@@ -616,17 +617,78 @@ class BackendController(QObject):
 ```
 
 #### Instructions:
-Please provide a well-formatted Markdown response structured with the following sections:
+1. **Root Cause**: Briefly state why the error occurred.
+2. **Corrected Query**: Provide the corrected Trino SQL query enclosed in a ```sql ... ``` code block."""
+
+                elif "med" in effort_lower:
+                    system_prompt = (
+                        "You are an expert Trino SQL database engineer and performance specialist. "
+                        "Your task is to diagnose Trino query failures, explain the specific root cause based strictly "
+                        "on the provided Trino error and failed query, and provide the exact corrected, executable Trino SQL query."
+                    )
+                    user_prompt = f"""### Target Table: `{clean_name}`
+
+#### Trino Error Message:
+```
+{error_msg}
+```
+
+#### Executed Trino SQL Query:
+```sql
+{failed_query if failed_query else "-- (Query could not be generated due to metadata error)"}
+```
+
+#### Instructions:
+Please provide a structured Markdown diagnosis:
 - **Root Cause**: Identify and explain the exact cause of this specific Trino error in the query.
 - **Fix Strategy**: Outline the necessary SQL adjustments (e.g. correct type casting, date formatting, column qualification).
 - **Corrected Query**: Provide the complete, valid, executable Trino SQL query enclosed in a ```sql ... ``` code block."""
 
-                full_logged_prompt = f"--- [System Prompt] ---\n{system_prompt}\n\n--- [User Prompt] ---\n{user_prompt}"
+                else:  # High / Deep Multi-Step Validation
+                    system_prompt = (
+                        "You are a principal Trino SQL compiler engineer and database performance auditor. "
+                        "Your task is to perform an exhaustive root-cause analysis and rigorous multi-point self-validation "
+                        "on the failed Trino SQL query. You must critically audit data types, CAST operations, catalog qualifications, "
+                        "and Trino ANSI SQL syntax rules before producing the final validated query."
+                    )
+                    user_prompt = f"""### Target Table: `{clean_name}`
 
-                print(f"\n--- [PROMPT PASSED TO QWEN ({model}) FOR {clean_name}] ---\n{full_logged_prompt}\n----------------------------------------\n")
+#### Trino Error Message:
+```
+{error_msg}
+```
+
+#### Executed Trino SQL Query:
+```sql
+{failed_query if failed_query else "-- (Query could not be generated due to metadata error)"}
+```
+
+#### In-Depth Analysis & Multi-Point Self-Validation Instructions:
+Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
+
+1. **Root Cause & Line-by-Line Fault Analysis**:
+   - Quote the exact Trino error message and identify the exact clause (`SELECT`, `FROM`, `JOIN`, `WHERE`, `EXCEPT`, or `CAST`) causing failure.
+   - Explain why this construction is invalid in Trino SQL across Oracle and PostgreSQL catalogs.
+
+2. **Data Type & Schema Compatibility Audit**:
+   - Audit all columns involved in the error (check data types: `VARCHAR`, `TIMESTAMP`, `DECIMAL`, `BIGINT`, `DATE`, etc.).
+   - Detail explicit `CAST(...)` or `TRY_CAST(...)` conversions and timezone/format rules needed for cross-database equality.
+
+3. **Self-Validation & Sanity Checklist**:
+   - Verify that all catalog/schema qualifications (`<catalog>.<schema>.<table>`) are correct.
+   - Verify that column aliases and ID column joins match identically on both sides.
+   - Confirm that reserved keywords are properly quoted or formatted according to Trino ANSI SQL syntax.
+   - Self-check that the query will execute without syntax errors, missing columns, or type mismatch exceptions.
+
+4. **Verified Corrected Trino SQL Query**:
+   - Provide the complete, fully corrected, validated, executable Trino SQL query enclosed in a ```sql ... ``` code block."""
+
+                full_logged_prompt = f"--- [System Prompt (Effort: {effort})] ---\n{system_prompt}\n\n--- [User Prompt] ---\n{user_prompt}"
+
+                print(f"\n--- [PROMPT PASSED TO QWEN ({model}) (Effort: {effort}) FOR {clean_name}] ---\n{full_logged_prompt}\n----------------------------------------\n")
                 
                 # Log full prompt to the UI logging screen
-                self.appendLog("INFO", f"[AI Assistant] Prompt sent to {model} for '{clean_name}':\n{user_prompt}")
+                self.appendLog("INFO", f"[AI Assistant] Prompt sent to {model} (Effort: {effort}) for '{clean_name}':\n{user_prompt}")
 
                 # Store prompt in cache
                 if clean_name in self._table_errors:
@@ -642,7 +704,8 @@ Please provide a well-formatted Markdown response structured with the following 
                     system=system_prompt,
                     model=model,
                     base_url=ollama_url,
-                    timeout=90
+                    timeout=120,
+                    effort=effort
                 )
 
                 if res["success"]:
@@ -824,7 +887,7 @@ Please provide a well-formatted Markdown response structured with the following 
     # Settings
     # -----------------------------------------------------------------------
 
-    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str, bool)
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str, str, bool)
     def updateSettings(
         self,
         host: str,
@@ -841,6 +904,7 @@ Please provide a well-formatted Markdown response structured with the following 
         notify_batch: bool = True,
         ollama_url: str = "http://localhost:11434",
         ollama_model: str = "qwen2.5-coder:1.5b",
+        ai_effort: str = "High",
         auto_ai: bool = True
     ):
         self._config["trino_host"] = host.strip()
@@ -857,6 +921,7 @@ Please provide a well-formatted Markdown response structured with the following 
         self._config["notify_batch_complete"] = bool(notify_batch)
         self._config["ollama_url"] = ollama_url.strip() or "http://localhost:11434"
         self._config["ollama_model"] = ollama_model.strip() or "qwen2.5-coder:1.5b"
+        self._config["ai_effort"] = ai_effort.strip() or "High"
         self._config["auto_ai_diagnosis"] = bool(auto_ai)
 
         save_config(self._config)

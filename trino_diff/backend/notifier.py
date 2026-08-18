@@ -22,25 +22,30 @@ class WindowsNotifier:
         try:
             if QSystemTrayIcon.isSystemTrayAvailable():
                 self._tray = QSystemTrayIcon()
-                # Create a crisp 32x32 icon for the tray
-                pixmap = QPixmap(32, 32)
-                pixmap.fill(Qt.transparent)
 
-                painter = QPainter(pixmap)
-                painter.setRenderHint(QPainter.Antialiasing, True)
-                painter.setBrush(QColor("#3B82F6"))
-                painter.setPen(Qt.NoPen)
-                painter.drawRoundedRect(0, 0, 32, 32, 6, 6)
+                # Locate resources directory
+                backend_dir = os.path.dirname(os.path.abspath(__file__))
+                res_dir = os.path.join(os.path.dirname(backend_dir), "resources")
+                ico_path = os.path.join(res_dir, "app_icon.ico")
+                png_path = os.path.join(res_dir, "icon_32.png")
+                main_png = os.path.join(res_dir, "app_icon.png")
 
-                painter.setPen(QColor("#FFFFFF"))
-                font = painter.font()
-                font.setBold(True)
-                font.setPixelSize(18)
-                painter.setFont(font)
-                painter.drawText(pixmap.rect(), Qt.AlignCenter, "⚡")
-                painter.end()
+                tray_icon = QIcon()
+                if os.path.exists(ico_path):
+                    tray_icon = QIcon(ico_path)
+                elif os.path.exists(png_path):
+                    tray_icon = QIcon(png_path)
+                elif os.path.exists(main_png):
+                    tray_icon = QIcon(main_png)
 
-                self._tray.setIcon(QIcon(pixmap))
+                # Add individual resolutions for crisp tray scaling
+                for size in [16, 24, 32, 48, 64]:
+                    sized_png = os.path.join(res_dir, f"icon_{size}.png")
+                    if os.path.exists(sized_png):
+                        tray_icon.addFile(sized_png)
+
+                if not tray_icon.isNull():
+                    self._tray.setIcon(tray_icon)
                 self._tray.setToolTip("Trino Diff Studio")
                 self._tray.show()
         except Exception as e:

@@ -124,19 +124,19 @@ ApplicationWindow {
                     Layout.bottomMargin: Theme.spacingMd
                     spacing: Theme.spacingSm
 
-                    Rectangle {
-                        width: 36; height: 36
-                        radius: Theme.radiusSm
-                        color: Theme.primary
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "⚡"
-                            font.pixelSize: 18
-                        }
+                    Image {
+                        Layout.preferredWidth: 36
+                        Layout.preferredHeight: 36
+                        Layout.alignment: Qt.AlignVCenter
+                        source: "../resources/app_icon.png"
+                        sourceSize: Qt.size(72, 72)
+                        fillMode: Image.PreserveAspectFit
+                        mipmap: true
                     }
 
                     Column {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignVCenter
                         spacing: 1
                         Text {
                             text: "Trino Diff Studio"

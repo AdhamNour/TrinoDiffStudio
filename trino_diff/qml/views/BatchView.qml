@@ -263,18 +263,21 @@ Item {
                         anchors.fill: parent
                         anchors.leftMargin:  Theme.spacingMd
                         anchors.rightMargin: Theme.spacingMd
-                        spacing: Theme.spacingSm
+                        spacing: Theme.spacingMd
 
-                        // Checkbox
+                        // Checkbox — fixed width so the table name never overlaps it
                         AppCheckBox {
                             id: rowCheck
+                            Layout.preferredWidth: 24
+                            Layout.alignment: Qt.AlignVCenter
                             checked: modelData.selected
                             onToggled: backend.toggleTableSelection(modelData.table_name, checked)
                         }
 
                         // Table name + id-column count
                         Column {
-                            Layout.preferredWidth: 240
+                            Layout.preferredWidth: 220
+                            Layout.minimumWidth: 120
                             Layout.alignment: Qt.AlignVCenter
                             spacing: 2
 

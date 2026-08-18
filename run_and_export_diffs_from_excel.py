@@ -197,14 +197,17 @@ def _freeze_and_filter(ws):
     ws.auto_filter.ref = ws.dimensions
 
 
-def _add_diff_legend(ws, start_row: int):
+def _add_diff_legend(ws, start_row: int, source_catalog: str = "postgres", target_catalog: str = "oracle"):
     """Add a small colour legend below the data."""
     from openpyxl.styles import PatternFill, Font, Alignment
 
+    src_desc = f"Row exists only in {source_catalog}" if source_catalog else "Row exists only in Source"
+    tgt_desc = f"Row exists only in {target_catalog}" if target_catalog else "Row exists only in Target"
+
     legend = [
         ("VALUE_MISMATCH",   "FFF2CC", "Row exists in both but at least one column differs"),
-        ("ONLY_IN_POSTGRES", "D9E1F2", "Row exists only in Postgres"),
-        ("ONLY_IN_ORACLE",   "FCE4D6", "Row exists only in Oracle"),
+        ("ONLY_IN_SOURCE",   "D9E1F2", src_desc),
+        ("ONLY_IN_TARGET",   "FCE4D6", tgt_desc),
         ("Highlighted cell", "FFCC00", "Specific column value differs between sources"),
     ]
 
@@ -225,7 +228,8 @@ def _add_diff_legend(ws, start_row: int):
 # ---------------------------------------------------------------------------
 
 def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame,
-                          id_cols: list, run_ts: str):
+                          id_cols: list, run_ts: str,
+                          source_catalog: str = "postgres", target_catalog: str = "oracle"):
     """Create a nicely formatted Summary sheet as the first sheet."""
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -263,8 +267,8 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame,
     # ---- Overall counts ----
     total    = len(df)
     mismatch = int((df["row_diff_type"] == "VALUE_MISMATCH").sum())   if "row_diff_type" in df.columns else 0
-    only_pg  = int((df["row_diff_type"] == "ONLY_IN_POSTGRES").sum()) if "row_diff_type" in df.columns else 0
-    only_ora = int((df["row_diff_type"] == "ONLY_IN_ORACLE").sum())   if "row_diff_type" in df.columns else 0
+    only_src = int((df["row_diff_type"].isin(["ONLY_IN_SOURCE", "ONLY_IN_POSTGRES"])).sum()) if "row_diff_type" in df.columns else 0
+    only_tgt = int((df["row_diff_type"].isin(["ONLY_IN_TARGET", "ONLY_IN_ORACLE"])).sum())   if "row_diff_type" in df.columns else 0
 
     ws.append(["Overall Summary", "", ""])
     r = ws.max_row
@@ -273,11 +277,14 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame,
         ws.cell(r, c).fill = SECT_FILL
     ws.row_dimensions[r].height = 20
 
+    src_label = f"ONLY_IN_{source_catalog.upper()} rows" if source_catalog else "ONLY_IN_SOURCE rows"
+    tgt_label = f"ONLY_IN_{target_catalog.upper()} rows" if target_catalog else "ONLY_IN_TARGET rows"
+
     summary_rows = [
         ("Total diff rows",       total,    None),
         ("VALUE_MISMATCH rows",   mismatch, "FFF2CC"),
-        ("ONLY_IN_POSTGRES rows", only_pg,  "D9E1F2"),
-        ("ONLY_IN_ORACLE rows",   only_ora, "FCE4D6"),
+        (src_label,               only_src, "D9E1F2"),
+        (tgt_label,               only_tgt, "FCE4D6"),
     ]
     for i, (label, val, colour) in enumerate(summary_rows):
         ws.append([label, val, ""])
@@ -310,30 +317,35 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame,
             cell.alignment = Alignment(horizontal="center")
             cell.border    = border
 
-        col_counts = (
-            df[df["row_diff_type"] == "VALUE_MISMATCH"]["column_name"]
-            .value_counts()
-            .reset_index()
-        )
-        col_counts.columns = ["column_name", "count"]
+        mismatch_df = df[df["row_diff_type"] == "VALUE_MISMATCH"]
+        if not mismatch_df.empty:
+            col_counts = (
+                mismatch_df["column_name"]
+                .dropna()
+                .value_counts()
+                .reset_index()
+            )
+            col_counts.columns = ["column_name", "count"]
 
-        for i, row in col_counts.iterrows():
-            pct = round(row["count"] / total * 100, 1) if total else 0
-            fill = ALT_FILL if i % 2 == 0 else WHITE_FILL
-            ws.append([row["column_name"], int(row["count"]), f"{pct}%"])
-            r = ws.max_row
-            ws.cell(r, 1).font = Font(name="Calibri", size=10)
-            ws.cell(r, 2).font = Font(bold=True, name="Calibri", size=10)
-            ws.cell(r, 3).font = Font(name="Calibri", size=10)
-            ws.cell(r, 2).alignment = Alignment(horizontal="center")
-            ws.cell(r, 3).alignment = Alignment(horizontal="center")
-            for c in (1, 2, 3):
-                ws.cell(r, c).fill   = fill
-                ws.cell(r, c).border = border
+            for i, row in col_counts.iterrows():
+                cnt  = int(row["count"])
+                pct  = round(cnt / total * 100, 1) if total else 0
+                fill = ALT_FILL if i % 2 == 0 else WHITE_FILL
+
+                ws.append([str(row["column_name"]), cnt, f"{pct}%"])
+                r = ws.max_row
+                ws.cell(r, 1).font = Font(name="Calibri", size=10)
+                ws.cell(r, 2).font = Font(bold=True, name="Calibri", size=10)
+                ws.cell(r, 3).font = Font(name="Calibri", size=10)
+                ws.cell(r, 2).alignment = Alignment(horizontal="center")
+                ws.cell(r, 3).alignment = Alignment(horizontal="center")
+                for c in (1, 2, 3):
+                    ws.cell(r, c).fill   = fill
+                    ws.cell(r, c).border = border
 
     ws.append(["", "", ""])  # spacer
 
-    # ---- Composite key columns used ----
+    # ---- Composite Key Columns ----
     ws.append(["Composite Key Columns", "", ""])
     r = ws.max_row
     for c in (1, 2, 3):
@@ -356,7 +368,7 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame,
 # ---------------------------------------------------------------------------
 
 def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame,
-                                  id_cols: list, fill_hex: str):
+                                  id_cols: list, fill_hex: str, is_target: bool = False):
     """Create a sheet listing records that exist only in one source.
 
     Only the composite key columns are shown -- column_name / postgres_value /
@@ -364,18 +376,28 @@ def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame,
     """
     from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 
-    ws = wb.create_sheet(sheet_name)
+    safe_name = "".join(c for c in str(sheet_name) if c not in r'\/*?:[]')[:31].strip() or ("ONLY_IN_TARGET" if is_target else "ONLY_IN_SOURCE")
+    if safe_name in wb.sheetnames:
+        safe_name = f"{safe_name}_tgt" if is_target else f"{safe_name}_src"
+        safe_name = safe_name[:31]
+
+    ws = wb.create_sheet(safe_name)
 
     if df_missing.empty:
-        ws.append([f"No {sheet_name} records found."])
+        ws.append([f"No {safe_name} records found."])
         ws.cell(1, 1).font = Font(italic=True, name="Calibri", size=10)
         return
 
     # Show only the key columns
     display_cols = [c for c in id_cols if c in df_missing.columns]
+    if not display_cols:
+        ws.append([f"No {safe_name} records found."])
+        ws.cell(1, 1).font = Font(italic=True, name="Calibri", size=10)
+        return
+
     _apply_header(ws, display_cols, header_fill_hex=fill_hex)
 
-    row_fill = PatternFill("solid", fgColor="FCE4D6" if "ORACLE" in sheet_name else "D9E1F2")
+    row_fill = PatternFill("solid", fgColor="FCE4D6" if is_target else "D9E1F2")
     thin = Side(style="thin", color="DDDDDD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     base_font = Font(name="Calibri", size=10)
@@ -396,7 +418,8 @@ def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame,
 
 
 def export_diff_to_excel(df: pd.DataFrame, xlsx_file: str,
-                         table_name: str, id_cols: list):
+                         table_name: str, id_cols: list,
+                         source_catalog: str = "postgres", target_catalog: str = "oracle"):
     """Write the diff DataFrame to a styled Excel workbook."""
     from openpyxl import Workbook
 
@@ -405,7 +428,7 @@ def export_diff_to_excel(df: pd.DataFrame, xlsx_file: str,
     wb = Workbook()
 
     # Summary sheet (position 0)
-    _write_summary_sheet(wb, table_name, df, id_cols, run_ts)
+    _write_summary_sheet(wb, table_name, df, id_cols, run_ts, source_catalog=source_catalog, target_catalog=target_catalog)
 
     # Diff data sheet (VALUE_MISMATCH rows, expanded per-column)
     ws = wb.create_sheet("Diff Data")
@@ -421,14 +444,20 @@ def export_diff_to_excel(df: pd.DataFrame, xlsx_file: str,
     _freeze_and_filter(ws)
 
     # Colour legend below data (2-row gap)
-    _add_diff_legend(ws, len(df) + 4)
+    _add_diff_legend(ws, len(df) + 4, source_catalog=source_catalog, target_catalog=target_catalog)
 
     # Dedicated sheets for missing records
-    df_only_oracle   = df[df["row_diff_type"] == "ONLY_IN_ORACLE"].copy()
-    df_only_postgres = df[df["row_diff_type"] == "ONLY_IN_POSTGRES"].copy()
+    df_only_target = df[df["row_diff_type"].isin(["ONLY_IN_TARGET", "ONLY_IN_ORACLE"])].copy()
+    df_only_source = df[df["row_diff_type"].isin(["ONLY_IN_SOURCE", "ONLY_IN_POSTGRES"])].copy()
 
-    _write_missing_records_sheet(wb, "ONLY_IN_ORACLE",   df_only_oracle,   id_cols, "C00000")
-    _write_missing_records_sheet(wb, "ONLY_IN_POSTGRES", df_only_postgres, id_cols, "2E75B6")
+    tgt_sheet = f"ONLY_IN_{target_catalog.upper().strip()}" if target_catalog else "ONLY_IN_TARGET"
+    src_sheet = f"ONLY_IN_{source_catalog.upper().strip()}" if source_catalog else "ONLY_IN_SOURCE"
+    if tgt_sheet.lower() == src_sheet.lower():
+        tgt_sheet = f"{tgt_sheet}_TARGET"
+        src_sheet = f"{src_sheet}_SOURCE"
+
+    _write_missing_records_sheet(wb, tgt_sheet, df_only_target, id_cols, "C00000", is_target=True)
+    _write_missing_records_sheet(wb, src_sheet, df_only_source, id_cols, "2E75B6", is_target=False)
 
     # Remove default blank sheet created by openpyxl
     if "Sheet" in wb.sheetnames:

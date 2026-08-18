@@ -104,12 +104,16 @@ def _freeze_and_filter(ws):
     ws.auto_filter.ref = ws.dimensions
 
 
-def _add_diff_legend(ws, start_row: int):
+def _add_diff_legend(ws, start_row: int, source_catalog: str = "source", target_catalog: str = "target"):
     from openpyxl.styles import PatternFill, Font, Alignment
+    src_desc = f"Row exists only in {source_catalog} catalog" if source_catalog else "Row exists only in Source catalog"
+    tgt_desc = f"Row exists only in {target_catalog} catalog" if target_catalog else "Row exists only in Target catalog"
+    src_code = f"ONLY_IN_{source_catalog.upper().strip()}" if source_catalog else "ONLY_IN_SOURCE"
+    tgt_code = f"ONLY_IN_{target_catalog.upper().strip()}" if target_catalog else "ONLY_IN_TARGET"
     legend = [
         ("VALUE_MISMATCH",   "FFF2CC", "Row exists in both but at least one column differs"),
-        ("ONLY_IN_SOURCE",   "D9E1F2", "Row exists only in Source catalog"),
-        ("ONLY_IN_TARGET",   "FCE4D6", "Row exists only in Target catalog"),
+        (src_code,           "D9E1F2", src_desc),
+        (tgt_code,           "FCE4D6", tgt_desc),
         ("Highlighted cell", "FFCC00", "Specific column value differs between sources"),
     ]
     ws.cell(row=start_row, column=1).value = "Colour Legend"
@@ -132,7 +136,8 @@ def _safe_int(val, default: int = 0) -> int:
         return default
 
 
-def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame, id_cols: list, run_ts: str):
+def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame, id_cols: list, run_ts: str,
+                         source_catalog: str = "source", target_catalog: str = "target"):
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     ws = wb.create_sheet("Summary", 0)
     ws.column_dimensions["A"].width = 38
@@ -173,11 +178,14 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame, id_cols: list, r
         ws.cell(r, c).fill = SECT_FILL
     ws.row_dimensions[r].height = 20
 
+    src_label = f"ONLY_IN_{source_catalog.upper().strip()} rows" if source_catalog else "ONLY_IN_SOURCE rows"
+    tgt_label = f"ONLY_IN_{target_catalog.upper().strip()} rows" if target_catalog else "ONLY_IN_TARGET rows"
+
     summary_rows = [
         ("Total diff rows",      total,    None),
         ("VALUE_MISMATCH rows",  mismatch, "FFF2CC"),
-        ("ONLY_IN_SOURCE rows",  only_src, "D9E1F2"),
-        ("ONLY_IN_TARGET rows",  only_tgt, "FCE4D6"),
+        (src_label,              only_src, "D9E1F2"),
+        (tgt_label,              only_tgt, "FCE4D6"),
     ]
     for i, (label, val, colour) in enumerate(summary_rows):
         ws.append([label, val, ""])
@@ -252,23 +260,28 @@ def _write_summary_sheet(wb, table_name: str, df: pd.DataFrame, id_cols: list, r
             ws.cell(r, c).border = border
 
 
-def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame, id_cols: list, fill_hex: str):
+def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame, id_cols: list, fill_hex: str, is_target: bool = False):
     from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
-    ws = wb.create_sheet(sheet_name)
+    safe_name = "".join(c for c in str(sheet_name) if c not in r'\/*?:[]')[:31].strip() or ("ONLY_IN_TARGET" if is_target else "ONLY_IN_SOURCE")
+    if safe_name in wb.sheetnames:
+        safe_name = f"{safe_name}_tgt" if is_target else f"{safe_name}_src"
+        safe_name = safe_name[:31]
+
+    ws = wb.create_sheet(safe_name)
     if df_missing.empty:
-        ws.append([f"No {sheet_name} records found."])
+        ws.append([f"No {safe_name} records found."])
         ws.cell(1, 1).font = Font(italic=True, name="Calibri", size=10)
         return
 
     display_cols = [c for c in id_cols if c in df_missing.columns]
     if not display_cols:
-        ws.append([f"No {sheet_name} records found."])
+        ws.append([f"No {safe_name} records found."])
         ws.cell(1, 1).font = Font(italic=True, name="Calibri", size=10)
         return
 
     _apply_header(ws, display_cols, header_fill_hex=fill_hex)
 
-    row_fill = PatternFill("solid", fgColor="FCE4D6" if "TARGET" in sheet_name or "ORACLE" in sheet_name else "D9E1F2")
+    row_fill = PatternFill("solid", fgColor="FCE4D6" if is_target else "D9E1F2")
     thin = Side(style="thin", color="DDDDDD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     base_font = Font(name="Calibri", size=10)
@@ -288,11 +301,12 @@ def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame, 
     _freeze_and_filter(ws)
 
 
-def export_diff_to_excel(df: pd.DataFrame, xlsx_file: str, table_name: str, id_cols: list):
+def export_diff_to_excel(df: pd.DataFrame, xlsx_file: str, table_name: str, id_cols: list,
+                         source_catalog: str = "postgres", target_catalog: str = "oracle"):
     from openpyxl import Workbook
     run_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     wb = Workbook()
-    _write_summary_sheet(wb, table_name, df, id_cols, run_ts)
+    _write_summary_sheet(wb, table_name, df, id_cols, run_ts, source_catalog=source_catalog, target_catalog=target_catalog)
 
     ws = wb.create_sheet("Diff Data")
     headers = list(df.columns)
@@ -304,13 +318,19 @@ def export_diff_to_excel(df: pd.DataFrame, xlsx_file: str, table_name: str, id_c
     _style_data_rows(ws, df)
     _auto_column_widths(ws, df)
     _freeze_and_filter(ws)
-    _add_diff_legend(ws, len(df) + 4)
+    _add_diff_legend(ws, len(df) + 4, source_catalog=source_catalog, target_catalog=target_catalog)
 
     df_only_target = df[df["row_diff_type"].isin(["ONLY_IN_TARGET", "ONLY_IN_ORACLE"])].copy()
     df_only_source = df[df["row_diff_type"].isin(["ONLY_IN_SOURCE", "ONLY_IN_POSTGRES"])].copy()
 
-    _write_missing_records_sheet(wb, "ONLY_IN_TARGET", df_only_target, id_cols, "C00000")
-    _write_missing_records_sheet(wb, "ONLY_IN_SOURCE", df_only_source, id_cols, "2E75B6")
+    tgt_sheet = f"ONLY_IN_{target_catalog.upper().strip()}" if target_catalog else "ONLY_IN_TARGET"
+    src_sheet = f"ONLY_IN_{source_catalog.upper().strip()}" if source_catalog else "ONLY_IN_SOURCE"
+    if tgt_sheet.lower() == src_sheet.lower():
+        tgt_sheet = f"{tgt_sheet}_TARGET"
+        src_sheet = f"{src_sheet}_SOURCE"
+
+    _write_missing_records_sheet(wb, tgt_sheet, df_only_target, id_cols, "C00000", is_target=True)
+    _write_missing_records_sheet(wb, src_sheet, df_only_source, id_cols, "2E75B6", is_target=False)
 
     if "Sheet" in wb.sheetnames:
         del wb["Sheet"]
@@ -491,7 +511,7 @@ class TrinoDiffWorker(QObject):
                     self.logEmitted.emit("SUCCESS", f"[{table_name}] Saved Parquet report → {os.path.basename(report_file)}")
                 else:
                     report_file = os.path.join(output_dir, f"{clean_name}_diff_{run_ts}.xlsx")
-                    export_diff_to_excel(df, report_file, table_name, id_cols)
+                    export_diff_to_excel(df, report_file, table_name, id_cols, source_catalog=source_catalog, target_catalog=target_catalog)
                     self.db.record_output_file(self.batch_id, table_name, report_file, "Excel")
                     self.logEmitted.emit("SUCCESS", f"[{table_name}] Saved Excel report → {os.path.basename(report_file)}")
 

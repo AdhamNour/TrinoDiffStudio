@@ -83,7 +83,7 @@ Rectangle {
                 delegate: Rectangle {
                     width: logList.width
                     implicitHeight: logContentRow.implicitHeight + 8
-                    color: index % 2 === 0 ? "transparent" : "#080C14"
+                    color: index % 2 === 0 ? "transparent" : Theme.bgDark
                     radius: 2
 
                     RowLayout {
@@ -144,14 +144,14 @@ Rectangle {
         if (level === "SUCCESS") return "#34D399"
         if (level === "ERROR")   return "#F87171"
         if (level === "WARN" || level === "WARNING") return "#FBBF24"
-        return "#60A5FA"
+        return "#FDE047"
     }
 
     function getTagBg(level) {
         if (level === "SUCCESS") return "#064E3B"
         if (level === "ERROR")   return "#7F1D1D"
         if (level === "WARN" || level === "WARNING") return "#78350F"
-        return "#1E3A8A"
+        return "#451A03"
     }
 
     function getMessageColor(level) {

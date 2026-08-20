@@ -63,7 +63,7 @@ Item {
                 color: Theme.textPrimary
                 placeholderTextColor: Theme.textMuted
                 selectionColor: Theme.primary
-                selectedTextColor: "#FFFFFF"
+                selectedTextColor: Theme.primaryText
                 background: null
 
                 onEditingFinished: root.editingFinished()

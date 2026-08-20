@@ -416,8 +416,8 @@ ApplicationWindow {
                 implicitWidth:  badgeText.implicitWidth + 12
                 implicitHeight: 18
                 radius: 9
-                color: navRoot.active ? (Theme.isDev ? "#CA8A04" : "#3D5AE0") : Theme.bgCard
-                border.color: navRoot.active ? (Theme.isDev ? "#EAB308" : "#6D84F5") : Theme.border
+                color: navRoot.active ? "#CA8A04" : Theme.bgCard
+                border.color: navRoot.active ? "#EAB308" : Theme.border
                 border.width: 1
 
                 Text {
@@ -456,6 +456,6 @@ ApplicationWindow {
         if (window.toastType === "success") return "#065F46"
         if (window.toastType === "error")   return "#991B1B"
         if (window.toastType === "warning") return "#92400E"
-        return "#1E40AF"
+        return "#78350F"
     }
 }

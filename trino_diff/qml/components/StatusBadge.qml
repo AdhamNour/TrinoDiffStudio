@@ -46,15 +46,15 @@ Rectangle {
 
     function getBgColor() {
         if (status === "Completed" || status === "Success") return "#064E3B"
-        if (status === "Running") return "#1E3A8A"
+        if (status === "Running") return "#451A03"
         if (status === "Error" || status === "Failed") return "#7F1D1D"
         if (status === "Warning") return "#78350F"
-        return "#1E293B"
+        return Theme.bgCardHover
     }
 
     function getBorderColor() {
         if (status === "Completed" || status === "Success") return "#059669"
-        if (status === "Running") return "#3B82F6"
+        if (status === "Running") return Theme.primary
         if (status === "Error" || status === "Failed") return "#DC2626"
         if (status === "Warning") return "#D97706"
         return Theme.borderSubtle
@@ -62,7 +62,7 @@ Rectangle {
 
     function getTextColor() {
         if (status === "Completed" || status === "Success") return "#A7F3D0"
-        if (status === "Running") return "#BFDBFE"
+        if (status === "Running") return "#FEF3C7"
         if (status === "Error" || status === "Failed") return "#FECDD3"
         if (status === "Warning") return "#FDE68A"
         return Theme.textSecondary

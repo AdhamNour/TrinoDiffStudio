@@ -343,9 +343,9 @@ Item {
                             implicitHeight: 34
                             radius: Theme.radiusSm
                             color: modelData.type === "Excel" ? "#064E3B"
-                                 : (modelData.type === "Parquet" ? "#3B0764" : "#1E3A8A")
+                                 : (modelData.type === "Parquet" ? "#3B0764" : "#451A03")
                             border.color: modelData.type === "Excel" ? "#059669"
-                                        : (modelData.type === "Parquet" ? "#9333EA" : "#3B82F6")
+                                        : (modelData.type === "Parquet" ? "#9333EA" : "#F59E0B")
                             border.width: 1
 
                             Text {

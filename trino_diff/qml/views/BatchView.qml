@@ -178,8 +178,8 @@ Item {
                 implicitWidth: batchChipText.implicitWidth + 16
                 implicitHeight: 24
                 radius: Theme.radiusSm
-                color: (backend && backend.isRunning) ? "#1E3A8A" : "#1A2540"
-                border.color: (backend && backend.isRunning) ? Theme.accentCyan : Theme.border
+                color: (backend && backend.isRunning) ? "#451A03" : Theme.bgInput
+                border.color: (backend && backend.isRunning) ? Theme.accentAmber : Theme.border
                 border.width: 1
 
                 Text {
@@ -188,7 +188,7 @@ Item {
                     text: (backend && backend.isRunning ? "⚡ " : "📦 ") + (backend ? backend.currentBatchId : "")
                     font.family: Theme.monoFontFamily
                     font.pixelSize: Theme.fontSizeXs
-                    color: (backend && backend.isRunning) ? Theme.accentCyan : Theme.textSecondary
+                    color: (backend && backend.isRunning) ? Theme.primary : Theme.textSecondary
                 }
             }
 
@@ -315,17 +315,17 @@ Item {
                                     implicitWidth:  chipLabel.implicitWidth + 12
                                     implicitHeight: 22
                                     radius: 4
-                                    color: "#1A2540"
+                                    color: Theme.bgCardHover
                                     border.color: Theme.border
                                     border.width: 1
 
                                     Text {
-                                        id: chipLabel
-                                        anchors.centerIn: parent
-                                        text: typeof modelData === "string" ? modelData : String(modelData)
-                                        font.family: Theme.monoFontFamily
-                                        font.pixelSize: 10
-                                        color: Theme.accentCyan
+                                         id: chipLabel
+                                         anchors.centerIn: parent
+                                         text: typeof modelData === "string" ? modelData : String(modelData)
+                                         font.family: Theme.monoFontFamily
+                                         font.pixelSize: 10
+                                         color: Theme.primary
                                     }
                                 }
                             }

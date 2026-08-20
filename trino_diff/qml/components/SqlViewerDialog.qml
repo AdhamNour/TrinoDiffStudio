@@ -108,8 +108,8 @@ Dialog {
                         readOnly: true
                         font.family: Theme.monoFontFamily
                         font.pixelSize: Theme.fontSizeSm
-                        color: "#A5B4FC"
-                        selectedTextColor: "#FFFFFF"
+                        color: "#FDE047"
+                        selectedTextColor: Theme.primaryText
                         selectionColor: Theme.primary
                         wrapMode: TextEdit.NoWrap
                         background: null

@@ -6,39 +6,37 @@ QtObject {
     // Mode detection: Dev mode when running locally from Python (version is "dev")
     property bool isDev: (typeof backend !== "undefined" && backend && backend.isDev) ? true : true
 
-    // Backgrounds
-    readonly property color bgDark: "#0B0F19"
-    readonly property color bgSidebar: "#111827"
-    readonly property color bgCard: "#182234"
-    readonly property color bgCardHover: "#1F2B42"
-    readonly property color bgInput: "#131C2D"
-    readonly property color bgInputHover: "#19253B"
+    // Backgrounds — Deep Carbon & Obsidian Dark Palette (eliminates muddy brown and dark blue)
+    readonly property color bgDark: "#0C0D0E"
+    readonly property color bgSidebar: "#131416"
+    readonly property color bgCard: "#1A1B1E"
+    readonly property color bgCardHover: "#222429"
+    readonly property color bgInput: "#141518"
+    readonly property color bgInputHover: "#1C1E22"
 
-    // Accents & Actions
-    // In Dev Mode: Bright Yellow (#FACC15 / #FDE047 / #EAB308)
-    // In Production / Release Mode: Dark Blue (#3B82F6 / #2563EB / #1D4ED8)
-    readonly property color primary: isDev ? "#FACC15" : "#3B82F6"
-    readonly property color primaryHover: isDev ? "#FDE047" : "#2563EB"
-    readonly property color primaryActive: isDev ? "#EAB308" : "#1D4ED8"
-    readonly property color primaryText: isDev ? "#0F172A" : "#FFFFFF"
+    // Accents & Actions — Vibrant Bright Yellow Palette
+    readonly property color primary: "#FACC15"
+    readonly property color primaryHover: "#FDE047"
+    readonly property color primaryActive: "#EAB308"
+    readonly property color primaryText: "#000000"
 
-    readonly property color accentCyan: isDev ? "#FACC15" : "#06B6D4"
+    readonly property color accentCyan: "#FACC15"
     readonly property color accentEmerald: "#10B981"
     readonly property color accentAmber: "#F59E0B"
     readonly property color accentRose: "#EF4444"
-    readonly property color accentPurple: "#8B5CF6"
+    readonly property color accentPurple: "#A855F7"
 
     // Text Colors
     readonly property color textPrimary: "#F9FAFB"
-    readonly property color textSecondary: "#94A3B8"
-    readonly property color textMuted: "#64748B"
-    readonly property color textDisabled: "#475569"
+    readonly property color textSecondary: "#9CA3AF"
+    readonly property color textMuted: "#6B7280"
+    readonly property color textDisabled: "#4B5563"
 
     // Borders & Dividers
-    readonly property color border: "#223049"
-    readonly property color borderHover: "#334155"
-    readonly property color borderFocus: isDev ? "#FACC15" : "#3B82F6"
-    readonly property color borderSubtle: "#1E293B"
+    readonly property color border: "#2D2F36"
+    readonly property color borderHover: "#454852"
+    readonly property color borderFocus: "#FACC15"
+    readonly property color borderSubtle: "#212328"
 
     // Typography — use single font name (QML does not parse CSS font stacks)
     readonly property string fontFamily: "Segoe UI"

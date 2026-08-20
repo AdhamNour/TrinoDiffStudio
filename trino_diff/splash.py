@@ -59,8 +59,8 @@ class SplashScreen(QWidget):
         self.card.setObjectName("splashCard")
         self.card.setStyleSheet("""
             QFrame#splashCard {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0B0F19, stop:1 #111827);
-                border: 1px solid #223049;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0C0D0E, stop:1 #131416);
+                border: 1px solid #2D2F36;
                 border-radius: 16px;
             }
         """)
@@ -109,12 +109,11 @@ class SplashScreen(QWidget):
         title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         title_label.setStyleSheet("color: #F9FAFB; background: transparent;")
 
-        is_dev = "dev" in self._version.lower()
-        tagline_color = "#FACC15" if is_dev else "#06B6D4"
-        pct_color = "#FACC15" if is_dev else "#3B82F6"
-        grad_stop0 = "#FACC15" if is_dev else "#3B82F6"
-        grad_stop1 = "#F59E0B" if is_dev else "#06B6D4"
-        grad_stop2 = "#EAB308" if is_dev else "#10B981"
+        tagline_color = "#FACC15"
+        pct_color = "#FACC15"
+        grad_stop0 = "#FACC15"
+        grad_stop1 = "#F59E0B"
+        grad_stop2 = "#EAB308"
 
         tagline_label = QLabel("Oracle ⇄ Postgres Data Verification Engine")
         tagline_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
@@ -135,9 +134,9 @@ class SplashScreen(QWidget):
         feature_badge = QLabel("  ⚡ High-Performance Automated SQL Query Diffing  ")
         feature_badge.setFont(QFont("Segoe UI", 9))
         feature_badge.setStyleSheet("""
-            color: #94A3B8;
-            background-color: #131C2D;
-            border: 1px solid #1E293B;
+            color: #9CA3AF;
+            background-color: #141518;
+            border: 1px solid #212328;
             border-radius: 6px;
             padding: 4px 8px;
         """)
@@ -153,7 +152,7 @@ class SplashScreen(QWidget):
 
         self.status_label = QLabel("Starting Trino Diff Studio runtime...")
         self.status_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Normal))
-        self.status_label.setStyleSheet("color: #94A3B8; background: transparent;")
+        self.status_label.setStyleSheet("color: #9CA3AF; background: transparent;")
 
         self.pct_label = QLabel("0%")
         self.pct_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -173,7 +172,7 @@ class SplashScreen(QWidget):
         self.progress_bar.setFixedHeight(6)
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
-                background-color: #131C2D;
+                background-color: #141518;
                 border: none;
                 border-radius: 3px;
             }}
@@ -236,7 +235,7 @@ class SplashScreen(QWidget):
         self.pct_label.setStyleSheet("color: #EF4444; background: transparent;")
         self.progress_bar.setStyleSheet("""
             QProgressBar {
-                background-color: #131C2D;
+                background-color: #141518;
                 border: none;
                 border-radius: 3px;
             }

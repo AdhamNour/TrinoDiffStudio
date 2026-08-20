@@ -493,10 +493,49 @@ class TrinoDiffWorker(QObject):
 
                 # Execute query
                 query_clean = query.strip().rstrip(';')
+
+                # Enable spill-to-disk before the diff query so Trino can offload
+                # intermediate data to disk instead of OOM-crashing the pod.
+                # Only spill_enabled is used here — it is the universal master switch
+                # supported across all Trino versions.  Each statement is wrapped in
+                # try/except so an unsupported property on this cluster logs a warning
+                # instead of aborting the task.
+                for _spill_stmt in (
+                    "SET SESSION spill_enabled = true",
+                ):
+                    try:
+                        cursor.execute(_spill_stmt)
+                    except Exception as _spill_err:
+                        self.logEmitted.emit("WARN", f"[{table_name}] Could not set session property ({_spill_stmt!r}): {_spill_err}")
+
                 cursor.execute(query_clean)
                 col_names = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-                df = pd.DataFrame(rows, columns=col_names)
+
+                # Stream results in pages so Trino can return rows incrementally
+                # instead of materialising the full result set before responding.
+                # fetchall() removes the natural client backpressure that keeps the
+                # pod alive; fetchmany() restores it (same behaviour as DBeaver).
+                _FETCH_CHUNK = 5_000
+                _chunks: list = []
+                while True:
+                    _batch = cursor.fetchmany(_FETCH_CHUNK)
+                    if not _batch:
+                        break
+                    _chunks.append(pd.DataFrame(_batch, columns=col_names))
+                df = (
+                    pd.concat(_chunks, ignore_index=True)
+                    if _chunks
+                    else pd.DataFrame(columns=col_names)
+                )
+
+                # Sort client-side; ORDER BY was removed from the generated SQL to
+                # allow Trino to stream rows without full result materialisation.
+                if not df.empty:
+                    _sort_cols = [ic for ic in id_cols if ic in df.columns] + [
+                        c for c in ("row_diff_type",) if c in df.columns
+                    ]
+                    if _sort_cols:
+                        df = df.sort_values(_sort_cols, ignore_index=True)
 
                 diff_count = len(df)
                 total_diffs += diff_count

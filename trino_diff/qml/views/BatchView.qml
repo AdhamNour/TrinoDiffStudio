@@ -393,6 +393,8 @@ Item {
                             implicitHeight: 28
                             customPaddingH: 8
                             Layout.alignment: Qt.AlignVCenter
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Generate and preview Trino diff SQL for " + modelData.table_name
                             onClicked: {
                                 backend.generateSqlPreview(
                                     modelData.table_name,
@@ -402,6 +404,20 @@ Item {
                                     targetCatCombo.currentText
                                 )
                             }
+                        }
+
+                        AppButton {
+                            text: "Excel"
+                            variant: "ghost"
+                            implicitHeight: 28
+                            customPaddingH: 8
+                            enabled: modelData.has_excel === true
+                            Layout.alignment: Qt.AlignVCenter
+                            ToolTip.visible: hovered
+                            ToolTip.text: modelData.has_excel === true
+                                          ? ("Open latest Excel diff report for " + modelData.table_name)
+                                          : ("No Excel report available for " + modelData.table_name + " (run diff first)")
+                            onClicked: backend.openLatestExcelForTable(modelData.table_name)
                         }
 
                         AppButton {

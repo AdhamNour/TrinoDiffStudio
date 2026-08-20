@@ -56,7 +56,8 @@ TRINO_USER = "admin"
 DEFAULT_SOURCE_CATALOG = "postgres"
 DEFAULT_TARGET_CATALOG = "oracle"
 DEFAULT_SCHEMAS = ["curated", "rdm"]
-ROW_FIELD_LIMIT_WARNING = 30  # warn if column count exceeds this
+ROW_FIELD_HARD_LIMIT    = 32   # Trino ROW() connector field cap
+ROW_FIELD_LIMIT_WARNING = 28   # warn with headroom before the hard limit
 
 # Trino reserved keywords that must be double-quoted when used as identifiers
 TRINO_RESERVED_KEYWORDS = {
@@ -304,29 +305,35 @@ def build_query(
     p_val_array = ",\n            ".join(f"d.p_{c}" for c in common_cols)
     o_val_array = ",\n            ".join(f"d.o_{c}" for c in common_cols)
 
-    # ---- WHERE clause for VALUE_MISMATCH branch ----
-    # Corner Case #11: dynamic exclude-columns and exclude-suffix
-    # row_diff_type filter is the first condition so there is exactly one WHERE keyword.
-    mismatch_where_parts = [
-        "d.row_diff_type = 'VALUE_MISMATCH'",
-        "u.postgres_value IS DISTINCT FROM u.oracle_value",
-    ]
+    # ---- WHERE clause extra conditions for VALUE_MISMATCH branch ----
+    # Corner Case #11: dynamic exclude-columns and exclude-suffix.
+    # Built as inline AND clauses so they slot into the single-pass WHERE block.
+    mismatch_extra_conds = []
     if exclude_cols:
         quoted_list = ", ".join(f"'{c}'" for c in exclude_cols)
-        mismatch_where_parts.append(f"u.column_name NOT IN ({quoted_list})")
+        mismatch_extra_conds.append(f"AND u.column_name NOT IN ({quoted_list})")
     if exclude_suffix:
-        mismatch_where_parts.append(f"u.column_name NOT LIKE '%{exclude_suffix}'")
+        mismatch_extra_conds.append(f"AND u.column_name NOT LIKE '%{exclude_suffix}'")
+    mismatch_extra_conditions = (
+        "\n        " + "\n        ".join(mismatch_extra_conds)
+    ) if mismatch_extra_conds else ""
 
-    mismatch_where_clause = "\n    WHERE\n        " + "\n        AND ".join(mismatch_where_parts)
+    # ---- Sentinel column — emit exactly one row per ONLY_IN record ----
+    # ONLY_IN rows are anchored to u.column_name = sentinel_col (the first common
+    # column) so the CROSS JOIN UNNEST produces exactly one row per missing key.
+    # The CASE expressions in the outer SELECT then NULL-out the column detail,
+    # matching the old UNION ALL branch — but without a second scan of the
+    # (expensive cross-catalog FULL OUTER JOIN) diff_data CTE.
+    sentinel_col = common_cols[0]
 
     # ---- SELECT id columns in final result ----
     id_select = ",\n        ".join(f"d.{ic}" for ic in id_columns)
 
-    # id columns for the missing-record branch (no alias needed — same names)
-    id_select_missing = ",\n        ".join(f"d.{ic}" for ic in id_columns)
-
-    # ---- ORDER BY ordinal positions ----
-    order_by = ", ".join(str(i + 1) for i in range(len(id_columns) + 1))  # +1 for column_name
+    # ORDER BY is intentionally omitted from the generated SQL.
+    # Including ORDER BY forces Trino to fully materialise the entire result set
+    # before returning a single row, consuming peak memory proportional to the
+    # full result size and preventing client-side backpressure.  Sorting is
+    # performed by the Python client after streaming the rows in chunks.
 
     query = f"""\
 WITH diff_data AS (
@@ -349,43 +356,34 @@ WITH diff_data AS (
            IS DISTINCT FROM
            ROW({o_row_cols})
     )
-),
-final_result AS (
-    -- VALUE_MISMATCH: expand per-column so each differing column gets its own row
-    SELECT
-        {id_select},
-        d.row_diff_type,
-        u.column_name,
-        u.postgres_value,
-        u.oracle_value
-    FROM diff_data d
-    CROSS JOIN UNNEST(
-        ARRAY[
-            {col_name_array}
-        ],
-        ARRAY[
-            {p_val_array}
-        ],
-        ARRAY[
-            {o_val_array}
-        ]
-    ) AS u(column_name, postgres_value, oracle_value){mismatch_where_clause}
-
-    UNION ALL
-
-    -- ONLY_IN_TARGET / ONLY_IN_SOURCE: emit a single summary row per missing record
-    SELECT
-        {id_select_missing},
-        d.row_diff_type,
-        CAST(NULL AS VARCHAR) AS column_name,
-        CAST(NULL AS VARCHAR) AS postgres_value,
-        CAST(NULL AS VARCHAR) AS oracle_value
-    FROM diff_data d
-    WHERE d.row_diff_type IN ('ONLY_IN_TARGET', 'ONLY_IN_SOURCE', 'ONLY_IN_ORACLE', 'ONLY_IN_POSTGRES')
 )
-SELECT *
-FROM final_result
-ORDER BY {order_by};
+SELECT
+    {id_select},
+    d.row_diff_type,
+    CASE WHEN d.row_diff_type = 'VALUE_MISMATCH' THEN u.column_name    ELSE CAST(NULL AS VARCHAR) END AS column_name,
+    CASE WHEN d.row_diff_type = 'VALUE_MISMATCH' THEN u.postgres_value ELSE CAST(NULL AS VARCHAR) END AS postgres_value,
+    CASE WHEN d.row_diff_type = 'VALUE_MISMATCH' THEN u.oracle_value   ELSE CAST(NULL AS VARCHAR) END AS oracle_value
+FROM diff_data d
+CROSS JOIN UNNEST(
+    ARRAY[
+        {col_name_array}
+    ],
+    ARRAY[
+        {p_val_array}
+    ],
+    ARRAY[
+        {o_val_array}
+    ]
+) AS u(column_name, postgres_value, oracle_value)
+WHERE
+    (
+        d.row_diff_type = 'VALUE_MISMATCH'
+        AND u.postgres_value IS DISTINCT FROM u.oracle_value{mismatch_extra_conditions}
+    )
+    OR (
+        d.row_diff_type IN ('ONLY_IN_TARGET', 'ONLY_IN_SOURCE')
+        AND u.column_name = '{sentinel_col}'
+    )
 """
     return query
 
@@ -552,10 +550,10 @@ def main():
     # ------------------------------------------------------------------
     if len(common_names) > ROW_FIELD_LIMIT_WARNING:
         print(
-            f"[WARN] {len(common_names)} columns will be placed into ROW() structs. "
-            f"Trino may have connector-specific field limits (typically ~32). "
-            f"If you encounter 'Too many fields in row type' errors, "
-            f"consider splitting the comparison into multiple CTEs.\n"
+            f"[WARN] {len(common_names)} columns will be placed into the ROW() comparison struct "
+            f"(connector hard limit is typically ~{ROW_FIELD_HARD_LIMIT} fields). "
+            f"If you see 'Too many fields in row type' errors, reduce column count with "
+            f"--exclude-columns or --exclude-suffix.\n"
         )
 
     # ------------------------------------------------------------------

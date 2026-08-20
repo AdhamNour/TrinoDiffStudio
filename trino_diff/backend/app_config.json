@@ -7,7 +7,7 @@
     "target_catalog": "oracle",
     "default_schemas": "curated, rdm",
     "output_dir": "C:/Users/anhassan/Diff Analysis",
-    "excel_path": "C:\\Users\\anhassan\\nera_automations\\Oracle_to_Postgre_Business_Columns 2.xlsx",
+    "excel_path": "C:/Users/anhassan/Documents/Adham's Assigned Table.xlsx",
     "exclude_columns": "extraction_timestamp",
     "exclude_suffix": "key",
     "trim_strings": true,

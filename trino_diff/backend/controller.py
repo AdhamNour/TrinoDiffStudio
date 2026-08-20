@@ -210,6 +210,7 @@ class BackendController(QObject):
 
         if success:
             self._tables = tables
+            self._updateTablesExcelAvailability()
             self._config["excel_path"] = clean_path
             save_config(self._config)
             self.configChanged.emit()
@@ -584,6 +585,26 @@ class BackendController(QObject):
         self.outputFilesChanged.emit()
         self._batches = self.db.get_batches_list()
         self.batchesChanged.emit()
+        self._updateTablesExcelAvailability()
+
+    def _updateTablesExcelAvailability(self):
+        """Update has_excel flag for all tables in memory and notify QML."""
+        if not self._tables:
+            return
+        changed = False
+        for t in self._tables:
+            has_ex = self.hasExcelReport(t.get("table_name", ""))
+            if t.get("has_excel") != has_ex:
+                t["has_excel"] = has_ex
+                changed = True
+        if changed:
+            self.tablesChanged.emit()
+
+    @Slot(str, result=bool)
+    def hasExcelReport(self, table_name: str) -> bool:
+        """Return True if a valid .xlsx diff report exists for the given table."""
+        path = self.getLatestExcelForTable(table_name)
+        return bool(path and path.lower().endswith(".xlsx") and os.path.isfile(path))
 
     @Slot(str)
     def openFile(self, path: str):
@@ -649,6 +670,75 @@ class BackendController(QObject):
         except Exception as e:
             self.notificationEmitted.emit("error", f"Could not open folder: {e}")
 
+    @Slot(str, result=str)
+    def getLatestExcelForTable(self, table_name: str) -> str:
+        """Find the latest .xlsx report path for a table across DB records and output folders."""
+        clean_table = table_name.strip().lower()
+        clean_base = clean_table.replace(".", "_")
+        tbl_only = clean_table.split(".")[-1]
+
+        candidate_files = []
+
+        # 1. Search SQLite records first (strictly .xlsx files only)
+        try:
+            db_report = self.db.get_latest_report_for_table(table_name, "Excel")
+            if db_report and os.path.isfile(db_report) and db_report.lower().endswith(".xlsx"):
+                candidate_files.append(db_report)
+        except Exception:
+            pass
+
+        # 2. Search output directory and project root
+        output_dir = self._config.get("output_dir", os.path.join(PROJECT_ROOT, "output"))
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.join(PROJECT_ROOT, output_dir)
+
+        search_dirs = [output_dir, PROJECT_ROOT]
+        for sdir in search_dirs:
+            if sdir and os.path.exists(sdir):
+                try:
+                    for fn in os.listdir(sdir):
+                        if fn.lower().endswith(".xlsx") and not fn.startswith("~$"):
+                            fn_low = fn.lower()
+                            if (
+                                fn_low.startswith(f"{clean_base}_diff") or
+                                fn_low.startswith(f"{clean_table}_diff") or
+                                fn_low.startswith(f"{tbl_only}_diff") or
+                                fn_low == f"{clean_base}.xlsx" or
+                                fn_low == f"{clean_table}.xlsx" or
+                                fn_low == f"{tbl_only}.xlsx"
+                            ):
+                                fp = os.path.join(sdir, fn)
+                                if os.path.isfile(fp) and fp.lower().endswith(".xlsx"):
+                                    candidate_files.append(fp)
+                except Exception:
+                    pass
+
+        # Filter strictly: only .xlsx files that actually exist
+        candidate_files = [f for f in candidate_files if f and f.lower().endswith(".xlsx") and os.path.isfile(f)]
+
+        if not candidate_files:
+            return ""
+
+        # Deduplicate and sort by modification time (latest first)
+        candidate_files = list(set(candidate_files))
+        candidate_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return candidate_files[0]
+
+    @Slot(str, result=bool)
+    def openLatestExcelForTable(self, table_name: str) -> bool:
+        """Find and launch the latest Excel diff report for the specified table."""
+        latest_file = self.getLatestExcelForTable(table_name)
+        if latest_file and os.path.exists(latest_file) and latest_file.lower().endswith(".xlsx"):
+            self.appendLog("INFO", f"Opening latest Excel diff report for '{table_name}': {os.path.basename(latest_file)}")
+            self.notificationEmitted.emit("info", f"Opening Excel report: {os.path.basename(latest_file)}")
+            self.openFile(latest_file)
+            return True
+        else:
+            self.appendLog("WARN", f"No Excel diff report found for table '{table_name}'. Run a diff first.")
+            self.notificationEmitted.emit("warning", f"No Excel diff report found for '{table_name}'. Run a diff first.")
+            self._notifier.notify("Report Not Found", f"No Excel diff report found for '{table_name}'. Run a diff first.", level="warning")
+            return False
+
     @Slot(str)
     def deleteOutputFile(self, path: str):
         clean_path = urllib.parse.unquote(path).replace("file:///", "").replace("file://", "")
@@ -660,6 +750,7 @@ class BackendController(QObject):
                 os.remove(clean_path)
                 self.appendLog("INFO", f"Deleted: {os.path.basename(clean_path)}")
                 self.refreshOutputFiles()
+                self._updateTablesExcelAvailability()
             except Exception as e:
                 self.notificationEmitted.emit("error", f"Could not delete file: {e}")
 

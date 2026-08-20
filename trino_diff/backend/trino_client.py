@@ -16,6 +16,7 @@ def get_trino_connection(host: str = "localhost", port: int = 8080, user: str = 
         port=port,
         user=user,
         http_scheme=http_scheme,
+        request_timeout=3600,  # 1-hour cap; raises instead of hanging if the pod dies mid-query
     )
 
 

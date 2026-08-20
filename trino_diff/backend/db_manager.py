@@ -490,3 +490,56 @@ class DatabaseManager:
             return []
         finally:
             session.close()
+
+    def get_latest_report_for_table(self, table_name: str, file_type: str = "Excel") -> Optional[str]:
+        """Find the latest report file path for a table from SQLite records."""
+        session = self.get_session()
+        try:
+            clean_tbl = table_name.strip().lower()
+            clean_base = clean_tbl.replace(".", "_")
+            tbl_only = clean_tbl.split(".")[-1]
+
+            # 1. Check OutputFileModel (strictly .xlsx only)
+            out_files = (
+                session.query(OutputFileModel)
+                .filter(
+                    (
+                        (OutputFileModel.table_name.in_([clean_tbl, clean_base, tbl_only, table_name])) |
+                        (OutputFileModel.file_name.ilike(f"{clean_base}_diff%.xlsx")) |
+                        (OutputFileModel.file_name.ilike(f"{clean_tbl}_diff%.xlsx")) |
+                        (OutputFileModel.file_name.ilike(f"{tbl_only}_diff%.xlsx"))
+                    ),
+                    OutputFileModel.file_name.ilike("%.xlsx"),
+                    OutputFileModel.file_path.ilike("%.xlsx")
+                )
+                .order_by(desc(OutputFileModel.id))
+                .all()
+            )
+            for of in out_files:
+                if of.file_path and of.file_path.lower().endswith(".xlsx") and os.path.isfile(of.file_path):
+                    return of.file_path
+
+            # 2. Check BatchTableResultModel (strictly .xlsx only)
+            tbl_results = (
+                session.query(BatchTableResultModel)
+                .filter(
+                    (
+                        (BatchTableResultModel.table_name.in_([clean_tbl, clean_base, tbl_only, table_name])) |
+                        (BatchTableResultModel.table_name.ilike(f"%{clean_base}%")) |
+                        (BatchTableResultModel.table_name.ilike(f"%{tbl_only}%"))
+                    ),
+                    BatchTableResultModel.report_file_path.ilike("%.xlsx")
+                )
+                .order_by(desc(BatchTableResultModel.id))
+                .all()
+            )
+            for tr in tbl_results:
+                if tr.report_file_path and tr.report_file_path.lower().endswith(".xlsx") and os.path.isfile(tr.report_file_path):
+                    return tr.report_file_path
+
+            return None
+        except Exception as e:
+            print(f"[SQLAlchemy Error] get_latest_report_for_table failed: {e}")
+            return None
+        finally:
+            session.close()

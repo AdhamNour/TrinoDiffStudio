@@ -17,6 +17,7 @@ from trino_diff.backend.worker import TrinoDiffWorker
 from trino_diff.backend.notifier import WindowsNotifier
 from trino_diff.backend.ollama_client import query_ollama, extract_sql_from_response, test_ollama_connection
 from trino_diff.backend.db_manager import DatabaseManager
+from trino_diff.version import get_app_version
 import generate_trino_diff
 
 
@@ -130,6 +131,10 @@ class BackendController(QObject):
     @Property(str, notify=statusTextChanged)
     def statusText(self):
         return self._status_text
+
+    @Property(str, constant=True)
+    def appVersion(self):
+        return get_app_version()
 
     # -----------------------------------------------------------------------
     # Logging helper

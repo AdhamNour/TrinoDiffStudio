@@ -62,10 +62,13 @@ def main():
         app.setWindowIcon(app_icon)
 
     # ── 3. Instant Splash Screen Display (< 200ms) ───────────────────────────
+    from trino_diff.version import get_app_version
+    app_version = get_app_version()
+
     no_splash = "--no-splash" in sys.argv
     splash = None
     if not no_splash:
-        splash = SplashScreen(app_version="v1.0.0")
+        splash = SplashScreen(app_version=app_version)
         splash.show()
         splash.set_progress(15, "Starting Trino Diff Studio runtime...")
 

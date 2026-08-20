@@ -17,3 +17,7 @@ __pycache__/
 
 # Environment variables
 .env
+
+# Build generated version metadata
+version.json
+trino_diff/version.json

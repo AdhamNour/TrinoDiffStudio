@@ -1,2 +1,3 @@
-# Trino Diff GUI Package
-__version__ = "1.0.0"
+from trino_diff.version import get_app_version, __version__
+
+__all__ = ["get_app_version", "__version__"]

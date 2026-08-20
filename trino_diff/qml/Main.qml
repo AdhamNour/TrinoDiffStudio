@@ -13,7 +13,7 @@ ApplicationWindow {
     minimumWidth: 980
     minimumHeight: 640
     visible: true
-    title: "Trino Database Diff & Report Studio"
+    title: "Trino Database Diff & Report Studio" + (backend && backend.appVersion ? (" (" + backend.appVersion + ")") : "")
     color: Theme.bgDark
 
     // Active View: "batch" | "adhoc" | "output" | "logs" | "settings"
@@ -145,11 +145,20 @@ ApplicationWindow {
                             font.weight: Font.Bold
                             color: Theme.textPrimary
                         }
-                        Text {
-                            text: "Oracle ⇄ Postgres"
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeXs
-                            color: Theme.accentCyan
+                        Row {
+                            spacing: 6
+                            Text {
+                                text: "Oracle ⇄ Postgres"
+                                font.family: Theme.fontFamily
+                                font.pixelSize: Theme.fontSizeXs
+                                color: Theme.accentCyan
+                            }
+                            Text {
+                                text: "• " + (backend && backend.appVersion ? backend.appVersion : "dev")
+                                font.family: Theme.monoFontFamily
+                                font.pixelSize: 10
+                                color: Theme.textMuted
+                            }
                         }
                     }
                 }

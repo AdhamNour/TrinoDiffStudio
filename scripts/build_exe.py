@@ -18,10 +18,26 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
 
+import json
+
+
 def print_banner(msg: str):
     print("\n" + "=" * 70)
     print(f"  {msg}")
     print("=" * 70 + "\n")
+
+
+def write_version_file(version: str):
+    """Write version.json into trino_diff directory so PyInstaller bundles it."""
+    if not version:
+        return
+    v_file = os.path.join(PROJECT_ROOT, "trino_diff", "version.json")
+    try:
+        with open(v_file, "w", encoding="utf-8") as f:
+            json.dump({"version": version.strip()}, f, indent=2)
+        print(f"[OK] Stamped application build version into {v_file}: {version.strip()}")
+    except Exception as e:
+        print(f"[WARN] Failed to write version file: {e}")
 
 
 def check_prerequisites():
@@ -59,7 +75,10 @@ def check_prerequisites():
         sys.exit(1)
 
 
-def build_executable(clean: bool = True, spec_file: str = "trino_diff.spec"):
+def build_executable(clean: bool = True, spec_file: str = "trino_diff.spec", version: str = ""):
+    if version:
+        write_version_file(version)
+
     spec_path = os.path.join(PROJECT_ROOT, spec_file)
     if not os.path.exists(spec_path):
         print(f"[ERROR] Spec file not found: {spec_path}")
@@ -85,7 +104,7 @@ def build_executable(clean: bool = True, spec_file: str = "trino_diff.spec"):
     if clean:
         cmd.append("--clean")
 
-    print_banner(f"Running PyInstaller with {spec_file}")
+    print_banner(f"Running PyInstaller with {spec_file}" + (f" (Version: {version})" if version else ""))
     print(f"Executing: {' '.join(cmd)}\n")
 
     result = subprocess.run(cmd, cwd=PROJECT_ROOT)
@@ -96,7 +115,7 @@ def build_executable(clean: bool = True, spec_file: str = "trino_diff.spec"):
     exe_path = os.path.join(dist_dir, "TrinoDiffStudio.exe")
     if os.path.exists(exe_path):
         size_mb = os.path.getsize(exe_path) / (1024 * 1024)
-        print_banner(f"SUCCESS: Executable created!\n  Path: {exe_path}\n  Size: {size_mb:.2f} MB")
+        print_banner(f"SUCCESS: Executable created!\n  Path: {exe_path}\n  Size: {size_mb:.2f} MB" + (f"\n  Version: {version}" if version else ""))
     else:
         print(f"[WARN] Build finished but {exe_path} was not found in dist/")
 
@@ -106,11 +125,12 @@ def main():
     parser.add_argument("--clean", action="store_true", default=True, help="Clean build directories before building")
     parser.add_argument("--no-clean", action="store_false", dest="clean", help="Do not clean build directories")
     parser.add_argument("--spec", default="trino_diff.spec", help="PyInstaller spec file to use")
+    parser.add_argument("--version", default=os.environ.get("APP_VERSION", ""), help="Application version string to stamp (e.g. v1.0.5)")
 
     args = parser.parse_args()
 
     check_prerequisites()
-    build_executable(clean=args.clean, spec_file=args.spec)
+    build_executable(clean=args.clean, spec_file=args.spec, version=args.version)
 
 
 if __name__ == "__main__":

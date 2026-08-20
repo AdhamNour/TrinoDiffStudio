@@ -13,6 +13,10 @@ on:
       - master
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Application Version (e.g. v1.0.5). If omitted, inferred from tag or run number.'
+        required: false
+        type: string
       create_release:
         description: 'Publish a GitHub Release with the built executable'
         required: false
@@ -43,9 +47,29 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Determine Application Version
+        id: get_version
+        shell: pwsh
+        run: |
+          $inputVer = "${{ github.event.inputs.version }}".Trim()
+          if ($inputVer -ne "") {
+            $ver = $inputVer
+          } elseif ("${{ github.ref }}" -like "refs/tags/v*") {
+            $ver = "${{ github.ref_name }}"
+          } else {
+            $ver = "v1.0.${{ github.run_number }}"
+          }
+          Write-Host "=========================================="
+          Write-Host "Application Build Version: $ver"
+          Write-Host "=========================================="
+          echo "APP_VERSION=$ver" >> $env:GITHUB_ENV
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+
       - name: Build Windows Executable
         run: |
-          python scripts/build_exe.py --clean
+          python scripts/build_exe.py --clean --version "${{ steps.get_version.outputs.version }}"
+        env:
+          APP_VERSION: ${{ steps.get_version.outputs.version }}
 
       - name: Verify Executable Creation
         shell: pwsh
@@ -101,11 +125,11 @@ jobs:
           retention-days: 30
 
       - name: Publish GitHub Release
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v1.0.{0}', github.run_number) }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Trino Diff Studio v1.0.{0}', github.run_number) }}
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Trino Diff Studio ${{ steps.get_version.outputs.version }}
           files: |
             dist/TrinoDiffStudio.exe
             dist/TrinoDiffStudio-windows-x64.zip

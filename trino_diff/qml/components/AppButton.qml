@@ -103,6 +103,9 @@ Button {
         if (root.variant === "secondary" || root.variant === "ghost") {
             return root.hovered ? Theme.textPrimary : Theme.textSecondary
         }
+        if (root.variant === "primary") {
+            return Theme.primaryText
+        }
         return "#FFFFFF"
     }
 

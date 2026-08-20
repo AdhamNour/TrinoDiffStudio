@@ -19,6 +19,12 @@ ApplicationWindow {
     // Active View: "batch" | "adhoc" | "output" | "logs" | "settings"
     property string currentView: "batch"
 
+    Component.onCompleted: {
+        if (backend) {
+            Theme.isDev = backend.isDev
+        }
+    }
+
     // Toast notification
     property string toastMessage: ""
     property string toastType: "info"
@@ -401,7 +407,7 @@ ApplicationWindow {
                 font.family: Theme.fontFamily
                 font.pixelSize: Theme.fontSizeBase
                 font.weight: navRoot.active ? Font.DemiBold : Font.Normal
-                color: navRoot.active ? "#FFFFFF" : Theme.textSecondary
+                color: navRoot.active ? Theme.primaryText : Theme.textSecondary
                 Layout.fillWidth: true
             }
 
@@ -410,8 +416,8 @@ ApplicationWindow {
                 implicitWidth:  badgeText.implicitWidth + 12
                 implicitHeight: 18
                 radius: 9
-                color: navRoot.active ? "#3D5AE0" : Theme.bgCard
-                border.color: navRoot.active ? "#6D84F5" : Theme.border
+                color: navRoot.active ? (Theme.isDev ? "#CA8A04" : "#3D5AE0") : Theme.bgCard
+                border.color: navRoot.active ? (Theme.isDev ? "#EAB308" : "#6D84F5") : Theme.border
                 border.width: 1
 
                 Text {
@@ -420,7 +426,7 @@ ApplicationWindow {
                     text: navRoot.badge
                     font.family: Theme.fontFamily
                     font.pixelSize: 10
-                    color: navRoot.active ? "#FFFFFF" : Theme.textMuted
+                    color: navRoot.active ? Theme.primaryText : Theme.textMuted
                 }
             }
         }

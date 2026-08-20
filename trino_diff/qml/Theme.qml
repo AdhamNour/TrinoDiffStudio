@@ -3,6 +3,9 @@ import QtQuick
 pragma Singleton
 
 QtObject {
+    // Mode detection: Dev mode when running locally from Python (version is "dev")
+    property bool isDev: (typeof backend !== "undefined" && backend && backend.isDev) ? true : true
+
     // Backgrounds
     readonly property color bgDark: "#0B0F19"
     readonly property color bgSidebar: "#111827"
@@ -12,10 +15,14 @@ QtObject {
     readonly property color bgInputHover: "#19253B"
 
     // Accents & Actions
-    readonly property color primary: "#3B82F6"
-    readonly property color primaryHover: "#2563EB"
-    readonly property color primaryActive: "#1D4ED8"
-    readonly property color accentCyan: "#06B6D4"
+    // In Dev Mode: Bright Yellow (#FACC15 / #FDE047 / #EAB308)
+    // In Production / Release Mode: Dark Blue (#3B82F6 / #2563EB / #1D4ED8)
+    readonly property color primary: isDev ? "#FACC15" : "#3B82F6"
+    readonly property color primaryHover: isDev ? "#FDE047" : "#2563EB"
+    readonly property color primaryActive: isDev ? "#EAB308" : "#1D4ED8"
+    readonly property color primaryText: isDev ? "#0F172A" : "#FFFFFF"
+
+    readonly property color accentCyan: isDev ? "#FACC15" : "#06B6D4"
     readonly property color accentEmerald: "#10B981"
     readonly property color accentAmber: "#F59E0B"
     readonly property color accentRose: "#EF4444"
@@ -30,7 +37,7 @@ QtObject {
     // Borders & Dividers
     readonly property color border: "#223049"
     readonly property color borderHover: "#334155"
-    readonly property color borderFocus: "#3B82F6"
+    readonly property color borderFocus: isDev ? "#FACC15" : "#3B82F6"
     readonly property color borderSubtle: "#1E293B"
 
     // Typography — use single font name (QML does not parse CSS font stacks)

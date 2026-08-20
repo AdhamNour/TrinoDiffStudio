@@ -109,9 +109,16 @@ class SplashScreen(QWidget):
         title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         title_label.setStyleSheet("color: #F9FAFB; background: transparent;")
 
+        is_dev = "dev" in self._version.lower()
+        tagline_color = "#FACC15" if is_dev else "#06B6D4"
+        pct_color = "#FACC15" if is_dev else "#3B82F6"
+        grad_stop0 = "#FACC15" if is_dev else "#3B82F6"
+        grad_stop1 = "#F59E0B" if is_dev else "#06B6D4"
+        grad_stop2 = "#EAB308" if is_dev else "#10B981"
+
         tagline_label = QLabel("Oracle ⇄ Postgres Data Verification Engine")
         tagline_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
-        tagline_label.setStyleSheet("color: #06B6D4; background: transparent;")
+        tagline_label.setStyleSheet(f"color: {tagline_color}; background: transparent;")
 
         title_col.addWidget(title_label)
         title_col.addWidget(tagline_label)
@@ -150,7 +157,7 @@ class SplashScreen(QWidget):
 
         self.pct_label = QLabel("0%")
         self.pct_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self.pct_label.setStyleSheet("color: #3B82F6; background: transparent;")
+        self.pct_label.setStyleSheet(f"color: {pct_color}; background: transparent;")
         self.pct_label.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         status_row.addWidget(self.status_label, 1)
@@ -164,17 +171,17 @@ class SplashScreen(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setFixedHeight(6)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
                 background-color: #131C2D;
                 border: none;
                 border-radius: 3px;
-            }
-            QProgressBar::chunk {
+            }}
+            QProgressBar::chunk {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3B82F6, stop:0.7 #06B6D4, stop:1 #10B981);
+                    stop:0 {grad_stop0}, stop:0.7 {grad_stop1}, stop:1 {grad_stop2});
                 border-radius: 3px;
-            }
+            }}
         """)
         card_layout.addWidget(self.progress_bar)
         card_layout.addSpacing(14)

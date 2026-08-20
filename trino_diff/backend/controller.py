@@ -136,6 +136,10 @@ class BackendController(QObject):
     def appVersion(self):
         return get_app_version()
 
+    @Property(bool, constant=True)
+    def isDev(self):
+        return get_app_version().lower() == "dev"
+
     # -----------------------------------------------------------------------
     # Logging helper
     # -----------------------------------------------------------------------

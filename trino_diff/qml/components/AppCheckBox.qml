@@ -39,7 +39,7 @@ CheckBox {
             font.family: Theme.fontFamily
             font.pixelSize: 11
             font.weight: Font.Bold
-            color: "#FFFFFF"
+            color: Theme.primaryText
             visible: control.checked
             scale: control.checked ? 1.0 : 0.4
             opacity: control.checked ? 1.0 : 0.0

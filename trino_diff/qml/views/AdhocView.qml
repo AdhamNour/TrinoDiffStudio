@@ -192,7 +192,10 @@ Item {
                                     schemaCombo.currentText,
                                     idColsField.text.trim(),
                                     sourceCatCombo.currentText,
-                                    targetCatCombo.currentText
+                                    targetCatCombo.currentText,
+                                    excludeColsField.text.trim(),
+                                    excludeSuffixField.text.trim(),
+                                    trimStringsCheck.checked
                                 )
                             }
                         }
@@ -210,7 +213,10 @@ Item {
                                     schemaCombo.currentText,
                                     idColsField.text.trim(),
                                     sourceCatCombo.currentText,
-                                    targetCatCombo.currentText
+                                    targetCatCombo.currentText,
+                                    excludeColsField.text.trim(),
+                                    excludeSuffixField.text.trim(),
+                                    trimStringsCheck.checked
                                 )
                             }
                         }

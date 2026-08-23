@@ -312,10 +312,10 @@ def build_query(
         "u.postgres_value IS DISTINCT FROM u.oracle_value",
     ]
     if exclude_cols:
-        quoted_list = ", ".join(f"'{c}'" for c in exclude_cols)
-        mismatch_where_parts.append(f"u.column_name NOT IN ({quoted_list})")
+        quoted_list = ", ".join(f"'{c.strip().lower()}'" for c in exclude_cols)
+        mismatch_where_parts.append(f"lower(u.column_name) NOT IN ({quoted_list})")
     if exclude_suffix:
-        mismatch_where_parts.append(f"u.column_name NOT LIKE '%{exclude_suffix}'")
+        mismatch_where_parts.append(f"lower(u.column_name) NOT LIKE '%{exclude_suffix.strip().lower()}'")
 
     mismatch_where_clause = "\n    WHERE\n        " + "\n        AND ".join(mismatch_where_parts)
 

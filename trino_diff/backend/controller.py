@@ -290,7 +290,18 @@ class BackendController(QObject):
         self._worker_thread.start()
 
     @Slot(str, str, str, str, str)
-    def runSingleTable(self, table_name: str, schema: str, id_cols_str: str, source_cat: str, target_cat: str):
+    @Slot(str, str, str, str, str, str, str, bool)
+    def runSingleTable(
+        self,
+        table_name: str,
+        schema: str,
+        id_cols_str: str,
+        source_cat: str,
+        target_cat: str,
+        exclude_cols_str: str = None,
+        exclude_suf_str: str = None,
+        trim_strings: bool = None,
+    ):
         if self._is_running:
             return
 
@@ -315,6 +326,12 @@ class BackendController(QObject):
             cfg_copy["source_catalog"] = source_cat
         if target_cat:
             cfg_copy["target_catalog"] = target_cat
+        if exclude_cols_str is not None:
+            cfg_copy["exclude_columns"] = exclude_cols_str
+        if exclude_suf_str is not None:
+            cfg_copy["exclude_suffix"] = exclude_suf_str
+        if trim_strings is not None:
+            cfg_copy["trim_strings"] = trim_strings
 
         batch_id = f"ADHOC_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self._current_batch_id = batch_id
@@ -461,7 +478,18 @@ class BackendController(QObject):
     # -----------------------------------------------------------------------
 
     @Slot(str, str, str, str, str)
-    def generateSqlPreview(self, table_name: str, schema: str, id_cols_str: str, source_cat: str, target_cat: str):
+    @Slot(str, str, str, str, str, str, str, bool)
+    def generateSqlPreview(
+        self,
+        table_name: str,
+        schema: str,
+        id_cols_str: str,
+        source_cat: str,
+        target_cat: str,
+        exclude_cols_str: str = None,
+        exclude_suf_str: str = None,
+        trim_strings: bool = None,
+    ):
         clean_table = table_name.strip().lower()
         if not clean_table:
             self.notificationEmitted.emit("warning", "Please provide a table name.")
@@ -502,9 +530,12 @@ class BackendController(QObject):
 
             common_col_meta = [{"name": n, "data_type": pg_name_map[n]["data_type"]} for n in common_names]
 
-            exclude_cols = [c.strip() for c in self._config.get("exclude_columns", "").split(",") if c.strip()]
-            exclude_suf = self._config.get("exclude_suffix", "").strip() or None
-            trim_strings = self._config.get("trim_strings", True)
+            raw_exclude_cols = exclude_cols_str if exclude_cols_str is not None else self._config.get("exclude_columns", "")
+            raw_exclude_suf = exclude_suf_str if exclude_suf_str is not None else self._config.get("exclude_suffix", "")
+            trim_strings_val = trim_strings if trim_strings is not None else self._config.get("trim_strings", True)
+
+            exclude_cols = [c.strip().lower() for c in raw_exclude_cols.split(",") if c.strip()]
+            exclude_suf = raw_exclude_suf.strip().lower() or None
 
             query = generate_trino_diff.build_query(
                 table_name=clean_table,
@@ -512,7 +543,7 @@ class BackendController(QObject):
                 common_col_meta=common_col_meta,
                 exclude_cols=exclude_cols,
                 exclude_suffix=exclude_suf,
-                trim_strings=trim_strings,
+                trim_strings=trim_strings_val,
                 pg_schema=pg_sch,
                 ora_schema=ora_sch,
                 source_catalog=src,

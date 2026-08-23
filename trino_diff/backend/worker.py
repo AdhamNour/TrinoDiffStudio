@@ -427,8 +427,8 @@ class TrinoDiffWorker(QObject):
         error_count = 0
         total_diffs = 0
 
-        exclude_cols = [c.strip() for c in exclude_columns.split(",") if c.strip()]
-        exclude_suf = exclude_suffix.strip() or None
+        exclude_cols = [c.strip().lower() for c in exclude_columns.split(",") if c.strip()]
+        exclude_suf = exclude_suffix.strip().lower() or None
 
         for idx, task in enumerate(self.tasks, start=1):
             if self._is_cancelled:

@@ -310,10 +310,10 @@ def build_query(
     # Built as inline AND clauses so they slot into the single-pass WHERE block.
     mismatch_extra_conds = []
     if exclude_cols:
-        quoted_list = ", ".join(f"'{c}'" for c in exclude_cols)
-        mismatch_extra_conds.append(f"AND u.column_name NOT IN ({quoted_list})")
+        quoted_list = ", ".join(f"'{c.strip().lower()}'" for c in exclude_cols)
+        mismatch_extra_conds.append(f"AND lower(u.column_name) NOT IN ({quoted_list})")
     if exclude_suffix:
-        mismatch_extra_conds.append(f"AND u.column_name NOT LIKE '%{exclude_suffix}'")
+        mismatch_extra_conds.append(f"AND lower(u.column_name) NOT LIKE '%{exclude_suffix.strip().lower()}'")
     mismatch_extra_conditions = (
         "\n        " + "\n        ".join(mismatch_extra_conds)
     ) if mismatch_extra_conds else ""

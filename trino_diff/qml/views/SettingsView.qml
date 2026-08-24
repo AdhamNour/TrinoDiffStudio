@@ -313,6 +313,98 @@ Item {
                 }
             }
 
+            // ── Execution Engine & Iceberg Configuration card ────────────
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: engineColumn.implicitHeight + Theme.spacingLg * 2
+                color: Theme.bgCard
+                radius: Theme.radiusMd
+                border.color: Theme.border
+                border.width: 1
+
+                Column {
+                    id: engineColumn
+                    anchors {
+                        top: parent.top; left: parent.left; right: parent.right
+                        margins: Theme.spacingLg
+                    }
+                    spacing: Theme.spacingMd
+
+                    Column {
+                        spacing: 2
+                        Text {
+                            text: "⚡ Execution Engine & Iceberg Acceleration"
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeMd
+                            font.weight: Font.DemiBold
+                            color: Theme.textPrimary
+                        }
+                        Text {
+                            text: "Select whether to use the Iceberg multi-step staged pipeline for high throughput and low memory, or the direct monolithic query."
+                            font.family: Theme.fontFamily
+                            font.pixelSize: Theme.fontSizeSm
+                            color: Theme.textMuted
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Rectangle { width: parent.width; height: 1; color: Theme.border }
+
+                    RowLayout {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+
+                        AppComboBox {
+                            id: diffEngineCombo
+                            Layout.fillWidth: true
+                            label: "Diff Execution Engine"
+                            model: [
+                                "Iceberg Staged Pipeline (Recommended - Fast, Low Memory, Resilient)",
+                                "Direct Monolithic Query (Legacy FULL OUTER JOIN)"
+                            ]
+                            currentIndex: {
+                                var eng = ((backend && backend.config ? backend.config.diff_engine : "iceberg") || "iceberg").toLowerCase()
+                                return (eng === "direct") ? 1 : 0
+                            }
+                        }
+                    }
+
+                    Column {
+                        width: parent.width
+                        spacing: Theme.spacingMd
+                        visible: diffEngineCombo.currentIndex === 0
+
+                        RowLayout {
+                            width: parent.width
+                            spacing: Theme.spacingMd
+
+                            AppTextField {
+                                id: icebergCatalogField
+                                Layout.fillWidth: true
+                                label: "Iceberg Catalog Name"
+                                text: (backend && backend.config) ? (backend.config.iceberg_catalog || "iceberg") : "iceberg"
+                                placeholderText: "iceberg"
+                            }
+
+                            AppTextField {
+                                id: icebergSchemaField
+                                Layout.preferredWidth: 240
+                                label: "Staging Schema Name"
+                                text: (backend && backend.config) ? (backend.config.iceberg_staging_schema || "staging") : "staging"
+                                placeholderText: "staging"
+                            }
+                        }
+
+                        AppCheckBox {
+                            id: icebergCleanupCheck
+                            checked: (backend && backend.config) ? (backend.config.iceberg_cleanup_on_error !== false) : true
+                            text: "Automatically drop temporary Iceberg staging tables on completion / failure"
+                        }
+                    }
+                }
+            }
+
             // ── Ollama AI Assistant card ─────────────────────────────────
             Rectangle {
                 Layout.fillWidth: true
@@ -475,6 +567,8 @@ Item {
                         if (aiEffortCombo.currentIndex === 2) effortVal = "Low"
                         else if (aiEffortCombo.currentIndex === 1) effortVal = "Medium"
 
+                        var engineVal = (diffEngineCombo.currentIndex === 1) ? "direct" : "iceberg"
+
                         backend.updateSettings(
                             hostField.text,
                             parseInt(portField.text) || 8080,
@@ -492,7 +586,11 @@ Item {
                             ollamaUrlField.text,
                             ollamaModelField.text,
                             effortVal,
-                            autoAiCheck.checked
+                            autoAiCheck.checked,
+                            engineVal,
+                            icebergCatalogField.text,
+                            icebergSchemaField.text,
+                            icebergCleanupCheck.checked
                         )
                     }
                 }

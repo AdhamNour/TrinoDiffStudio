@@ -427,6 +427,39 @@ class TrinoDiffWorker(QObject):
         error_count = 0
         total_diffs = 0
 
+        diff_engine = self.config.get("diff_engine", "iceberg").lower()
+        iceberg_catalog = self.config.get("iceberg_catalog", "iceberg")
+        iceberg_staging_schema = self.config.get("iceberg_staging_schema", "staging")
+        iceberg_cleanup_on_error = self.config.get("iceberg_cleanup_on_error", True)
+
+        self.logEmitted.emit("INFO", f"Engine: {diff_engine.upper()} | Trino: {host}:{port} ({user}) | Catalogs: {source_catalog} -> {target_catalog}")
+        if diff_engine == "iceberg":
+            self.logEmitted.emit("INFO", f"Iceberg Staging Target: {iceberg_catalog}.{iceberg_staging_schema}")
+
+        total_tasks = len(self.tasks)
+        self.db.create_batch(
+            batch_id=self.batch_id,
+            batch_type=self.batch_type,
+            source_catalog=source_catalog,
+            target_catalog=target_catalog,
+            output_dir=output_dir,
+            total_tables=total_tasks,
+            excel_path=self.config.get("excel_path", ""),
+            config_snapshot=self.config
+        )
+
+        try:
+            conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+        except Exception as e:
+            self.logEmitted.emit("ERROR", f"Failed to connect to Trino: {e}")
+            self.db.finish_batch(self.batch_id, "FAILED", 0, total_tasks, 0)
+            self.allFinished.emit(0, len(self.tasks))
+            return
+
+        success_count = 0
+        error_count = 0
+        total_diffs = 0
+
         exclude_cols = [c.strip().lower() for c in exclude_columns.split(",") if c.strip()]
         exclude_suf = exclude_suffix.strip().lower() or None
 
@@ -448,6 +481,7 @@ class TrinoDiffWorker(QObject):
             run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             sql_file = os.path.join(output_dir, f"{clean_name}_diff.sql")
             query = ""
+            created_temp_tables = []
 
             try:
                 cursor = conn.cursor()
@@ -471,65 +505,186 @@ class TrinoDiffWorker(QObject):
 
                 common_col_meta = [{"name": n, "data_type": pg_name_map[n]["data_type"]} for n in common_names]
 
-                # Generate SQL
-                query = generate_trino_diff.build_query(
-                    table_name=table_name,
-                    id_columns=id_cols,
-                    common_col_meta=common_col_meta,
-                    exclude_cols=exclude_cols,
-                    exclude_suffix=exclude_suf,
-                    trim_strings=trim_strings,
-                    pg_schema=pg_schema,
-                    ora_schema=ora_schema,
-                    source_catalog=source_catalog,
-                    target_catalog=target_catalog,
-                )
+                # Enable session spill-to-disk
+                try:
+                    cursor.execute("SET SESSION spill_enabled = true")
+                except Exception as _spill_err:
+                    self.logEmitted.emit("WARN", f"[{table_name}] Could not set session spill_enabled: {_spill_err}")
 
-                with open(sql_file, "w", encoding="utf-8") as f:
-                    f.write(query)
+                df = pd.DataFrame()
 
-                self.db.record_output_file(self.batch_id, table_name, sql_file, "SQL")
-                self.logEmitted.emit("INFO", f"[{table_name}] Generated SQL → {os.path.basename(sql_file)}")
+                if diff_engine == "iceberg":
+                    # =========================================================
+                    # ICEBERG STAGED MULTI-QUERY BREAKDOWN PIPELINE
+                    # =========================================================
+                    run_id = f"{int(time.time())}_{idx}"
+                    src_temp, tgt_temp, mismatch_temp = generate_trino_diff.build_iceberg_stage_table_names(table_name, run_id)
+                    created_temp_tables = [src_temp, tgt_temp, mismatch_temp]
 
-                # Execute query
-                query_clean = query.strip().rstrip(';')
+                    # Save full multi-stage SQL plan to output file
+                    query = generate_trino_diff.build_iceberg_pipeline_preview_sql(
+                        table_name=table_name,
+                        id_columns=id_cols,
+                        common_col_meta=common_col_meta,
+                        exclude_cols=exclude_cols,
+                        exclude_suffix=exclude_suf,
+                        trim_strings=trim_strings,
+                        pg_schema=pg_schema,
+                        ora_schema=ora_schema,
+                        source_catalog=source_catalog,
+                        target_catalog=target_catalog,
+                        iceberg_catalog=iceberg_catalog,
+                        iceberg_schema=iceberg_staging_schema,
+                        run_id=run_id,
+                    )
+                    with open(sql_file, "w", encoding="utf-8") as f:
+                        f.write(query)
 
-                # Enable spill-to-disk before the diff query so Trino can offload
-                # intermediate data to disk instead of OOM-crashing the pod.
-                # Only spill_enabled is used here — it is the universal master switch
-                # supported across all Trino versions.  Each statement is wrapped in
-                # try/except so an unsupported property on this cluster logs a warning
-                # instead of aborting the task.
-                for _spill_stmt in (
-                    "SET SESSION spill_enabled = true",
-                ):
+                    self.db.record_output_file(self.batch_id, table_name, sql_file, "SQL")
+                    self.logEmitted.emit("INFO", f"[{table_name}] Generated Iceberg Plan → {os.path.basename(sql_file)}")
+
+                    # Ensure staging schema exists in Iceberg catalog
                     try:
-                        cursor.execute(_spill_stmt)
-                    except Exception as _spill_err:
-                        self.logEmitted.emit("WARN", f"[{table_name}] Could not set session property ({_spill_stmt!r}): {_spill_err}")
+                        cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {iceberg_catalog}.{iceberg_staging_schema}")
+                    except Exception as _sch_err:
+                        self.logEmitted.emit("DEBUG", f"[{table_name}] Schema check ({iceberg_catalog}.{iceberg_staging_schema}): {_sch_err}")
 
-                cursor.execute(query_clean)
-                col_names = [desc[0] for desc in cursor.description]
+                    # Stage 1A: Ingest Source into Iceberg Staging
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 1A/4] Ingesting {source_catalog} -> {iceberg_catalog}.{iceberg_staging_schema}.{src_temp}...")
+                    q_src_ctas = generate_trino_diff.build_iceberg_stage1_ctas(
+                        catalog=source_catalog, schema=pg_schema, table_name=table_name,
+                        id_columns=id_cols, common_col_meta=common_col_meta, trim_strings=trim_strings,
+                        iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema, target_temp_table=src_temp
+                    )
+                    try:
+                        cursor.execute(q_src_ctas.strip().rstrip(';'))
+                    except Exception as _ctas_err:
+                        if "No factory for location" in str(_ctas_err) or "file:" in str(_ctas_err):
+                            self.logEmitted.emit("ERROR", f"[{table_name}] Trino Iceberg Server Configuration Error: Trino cannot write to local file path without 'fs.native-local.enabled=true' in {iceberg_catalog}.properties on the Trino server.")
+                        raise
 
-                # Stream results in pages so Trino can return rows incrementally
-                # instead of materialising the full result set before responding.
-                # fetchall() removes the natural client backpressure that keeps the
-                # pod alive; fetchmany() restores it (same behaviour as DBeaver).
-                _FETCH_CHUNK = 5_000
-                _chunks: list = []
-                while True:
-                    _batch = cursor.fetchmany(_FETCH_CHUNK)
-                    if not _batch:
-                        break
-                    _chunks.append(pd.DataFrame(_batch, columns=col_names))
-                df = (
-                    pd.concat(_chunks, ignore_index=True)
-                    if _chunks
-                    else pd.DataFrame(columns=col_names)
-                )
+                    # Stage 1B: Ingest Target into Iceberg Staging
+                    if self._is_cancelled:
+                        raise InterruptedError("Execution cancelled by user.")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 1B/4] Ingesting {target_catalog} -> {iceberg_catalog}.{iceberg_staging_schema}.{tgt_temp}...")
+                    q_tgt_ctas = generate_trino_diff.build_iceberg_stage1_ctas(
+                        catalog=target_catalog, schema=ora_schema, table_name=table_name,
+                        id_columns=id_cols, common_col_meta=common_col_meta, trim_strings=trim_strings,
+                        iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema, target_temp_table=tgt_temp
+                    )
+                    cursor.execute(q_tgt_ctas.strip().rstrip(';'))
 
-                # Sort client-side; ORDER BY was removed from the generated SQL to
-                # allow Trino to stream rows without full result materialisation.
+                    # Stage 2A: Query ONLY_IN_SOURCE
+                    if self._is_cancelled:
+                        raise InterruptedError("Execution cancelled by user.")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 2A/4] Checking for ONLY_IN_SOURCE records...")
+                    q_mis_src = generate_trino_diff.build_iceberg_stage2_missing_keys(
+                        id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
+                        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, diff_type="ONLY_IN_SOURCE"
+                    )
+                    cursor.execute(q_mis_src.strip().rstrip(';'))
+                    col_names = [d[0] for d in cursor.description]
+                    _chunks = []
+                    while True:
+                        _batch = cursor.fetchmany(5000)
+                        if not _batch:
+                            break
+                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
+                    df_only_src = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
+                    self.logEmitted.emit("INFO", f"[{table_name}] Found {len(df_only_src)} ONLY_IN_SOURCE record(s)")
+
+                    # Stage 2B: Query ONLY_IN_TARGET
+                    if self._is_cancelled:
+                        raise InterruptedError("Execution cancelled by user.")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 2B/4] Checking for ONLY_IN_TARGET records...")
+                    q_mis_tgt = generate_trino_diff.build_iceberg_stage2_missing_keys(
+                        id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
+                        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, diff_type="ONLY_IN_TARGET"
+                    )
+                    cursor.execute(q_mis_tgt.strip().rstrip(';'))
+                    col_names = [d[0] for d in cursor.description]
+                    _chunks = []
+                    while True:
+                        _batch = cursor.fetchmany(5000)
+                        if not _batch:
+                            break
+                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
+                    df_only_tgt = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
+                    self.logEmitted.emit("INFO", f"[{table_name}] Found {len(df_only_tgt)} ONLY_IN_TARGET record(s)")
+
+                    # Stage 3: Isolate Mismatches by Row Checksum Hash
+                    if self._is_cancelled:
+                        raise InterruptedError("Execution cancelled by user.")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 3/4] Isolating value mismatches via row hash checksums...")
+                    q_mismatch_ctas = generate_trino_diff.build_iceberg_stage3_mismatch_keys_ctas(
+                        id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
+                        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
+                    )
+                    cursor.execute(q_mismatch_ctas.strip().rstrip(';'))
+
+                    # Stage 4: Targeted Column UNNEST (Only on Mismatched Keys)
+                    if self._is_cancelled:
+                        raise InterruptedError("Execution cancelled by user.")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 4/4] Unnesting columns for differing records only...")
+                    q_unnest = generate_trino_diff.build_iceberg_stage4_mismatch_unnest(
+                        id_columns=id_cols, common_col_meta=common_col_meta, exclude_cols=exclude_cols,
+                        exclude_suffix=exclude_suf, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
+                        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
+                    )
+                    cursor.execute(q_unnest.strip().rstrip(';'))
+                    col_names = [d[0] for d in cursor.description]
+                    _chunks = []
+                    while True:
+                        _batch = cursor.fetchmany(5000)
+                        if not _batch:
+                            break
+                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
+                    df_mismatches = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
+                    self.logEmitted.emit("INFO", f"[{table_name}] Found {len(df_mismatches)} VALUE_MISMATCH diff row(s)")
+
+                    # Merge diff sections
+                    df = pd.concat([df_only_src, df_only_tgt, df_mismatches], ignore_index=True)
+
+                else:
+                    # =========================================================
+                    # DIRECT MONOLITHIC FULL OUTER JOIN
+                    # =========================================================
+                    query = generate_trino_diff.build_direct_query(
+                        table_name=table_name,
+                        id_columns=id_cols,
+                        common_col_meta=common_col_meta,
+                        exclude_cols=exclude_cols,
+                        exclude_suffix=exclude_suf,
+                        trim_strings=trim_strings,
+                        pg_schema=pg_schema,
+                        ora_schema=ora_schema,
+                        source_catalog=source_catalog,
+                        target_catalog=target_catalog,
+                    )
+                    with open(sql_file, "w", encoding="utf-8") as f:
+                        f.write(query)
+
+                    self.db.record_output_file(self.batch_id, table_name, sql_file, "SQL")
+                    self.logEmitted.emit("INFO", f"[{table_name}] Generated SQL → {os.path.basename(sql_file)}")
+
+                    query_clean = query.strip().rstrip(';')
+                    cursor.execute(query_clean)
+                    col_names = [desc[0] for desc in cursor.description]
+
+                    _FETCH_CHUNK = 5_000
+                    _chunks: list = []
+                    while True:
+                        _batch = cursor.fetchmany(_FETCH_CHUNK)
+                        if not _batch:
+                            break
+                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
+                    df = (
+                        pd.concat(_chunks, ignore_index=True)
+                        if _chunks
+                        else pd.DataFrame(columns=col_names)
+                    )
+
+                # Client-side deterministic sort
                 if not df.empty:
                     _sort_cols = [ic for ic in id_cols if ic in df.columns] + [
                         c for c in ("row_diff_type",) if c in df.columns
@@ -539,12 +694,12 @@ class TrinoDiffWorker(QObject):
 
                 diff_count = len(df)
                 total_diffs += diff_count
-                self.logEmitted.emit("INFO", f"[{table_name}] Query returned {diff_count} diff row(s)")
+                self.logEmitted.emit("INFO", f"[{table_name}] Query returned {diff_count} total diff row(s)")
 
                 # Export to Parquet (if > 1,048,576 rows) or Excel
                 if diff_count > MAX_EXCEL_ROWS:
                     report_file = os.path.join(output_dir, f"{clean_name}_diff_{run_ts}.parquet")
-                    self.logEmitted.emit("WARN", f"[{table_name}] Result row count ({diff_count:,}) exceeds Excel maximum limit of 1,048,576. Saving to Parquet format.")
+                    self.logEmitted.emit("WARN", f"[{table_name}] Result row count ({diff_count:,}) exceeds Excel limit. Saving Parquet format.")
                     export_diff_to_parquet(df, report_file, table_name, id_cols)
                     self.db.record_output_file(self.batch_id, table_name, report_file, "Parquet")
                     self.logEmitted.emit("SUCCESS", f"[{table_name}] Saved Parquet report → {os.path.basename(report_file)}")
@@ -572,7 +727,6 @@ class TrinoDiffWorker(QObject):
                 self.tableStatusUpdated.emit(table_name, "Completed", diff_count)
                 self.tableFinished.emit(table_name, sql_file, report_file)
                 success_count += 1
-                cursor.close()
 
             except Exception as ex:
                 error_msg = str(ex)
@@ -594,6 +748,26 @@ class TrinoDiffWorker(QObject):
                 self.tableStatusUpdated.emit(table_name, "Error", 0)
                 self.tableErrorOccurred.emit(table_name, error_msg, query)
                 error_count += 1
+
+            finally:
+                # Stage 5: Cleanup temporary Iceberg staging tables
+                if diff_engine == "iceberg" and created_temp_tables:
+                    if error_count == 0 or iceberg_cleanup_on_error or self._is_cancelled:
+                        try:
+                            clean_cursor = conn.cursor()
+                            for tbl in created_temp_tables:
+                                try:
+                                    clean_cursor.execute(f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_staging_schema}.{tbl}")
+                                except Exception as _drp_e:
+                                    self.logEmitted.emit("WARN", f"[{table_name}] Could not drop staging table {tbl}: {_drp_e}")
+                            clean_cursor.close()
+                            self.logEmitted.emit("INFO", f"[{table_name}] Cleaned up temporary Iceberg staging tables.")
+                        except Exception as _clean_ex:
+                            self.logEmitted.emit("WARN", f"[{table_name}] Staging table cleanup encountered: {_clean_ex}")
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
         try:
             conn.close()

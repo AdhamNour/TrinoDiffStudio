@@ -190,21 +190,26 @@ def warn_type_issues(common_col_meta: list):
 
 
 # ---------------------------------------------------------------------------
-# Query Builder
+# Query Builders: Direct & Iceberg-Staged Pipelines
 # ---------------------------------------------------------------------------
 
-def build_cast(alias: str, col: str, data_type: str, trim: bool) -> str:
-    """Build a single CAST expression."""
+def build_cast_expr(col: str, data_type: str, trim: bool, table_alias: str = "") -> str:
+    """Build a standard CAST expression for a column."""
     qcol = quote(col)
-    prefix = alias[0]  # 'p' or 'o'
-    
+    tbl = f"{table_alias}." if table_alias else ""
     if "timestamp" in data_type or data_type == "date":
-        cast_expr = f"CAST(CAST({alias}.{qcol} AS TIMESTAMP(0)) AS VARCHAR)"
+        expr = f"CAST(CAST({tbl}{qcol} AS TIMESTAMP(0)) AS VARCHAR)"
     else:
-        cast_expr = f"CAST({alias}.{qcol} AS VARCHAR)"
-
+        expr = f"CAST({tbl}{qcol} AS VARCHAR)"
     if trim:
-        cast_expr = f"TRIM({cast_expr})"
+        expr = f"TRIM({expr})"
+    return expr
+
+
+def build_cast(alias: str, col: str, data_type: str, trim: bool) -> str:
+    """Build a single CAST expression with prefix alias (p_/o_)."""
+    prefix = alias[0]  # 'p' or 'o'
+    cast_expr = build_cast_expr(col, data_type, trim, table_alias=alias)
     return f"{cast_expr} AS {prefix}_{col}"
 
 
@@ -238,7 +243,7 @@ def check_prefix_collision(cols: list) -> None:
             )
 
 
-def build_query(
+def build_direct_query(
     table_name: str,
     id_columns: list,
     common_col_meta: list,
@@ -250,17 +255,10 @@ def build_query(
     source_catalog: str = "postgres",
     target_catalog: str = "oracle",
 ) -> str:
-    """Assemble the full Trino diff query.
-
-    ONLY_IN_ORACLE / ONLY_IN_POSTGRES rows produce a single summary row per
-    missing record (key columns + row_diff_type; column_name/postgres_value/
-    oracle_value are NULL).  VALUE_MISMATCH rows are still expanded per-column
-    via UNNEST so individual differing columns are surfaced.
-    """
+    """Assemble the monolithic Trino diff query (Single-pass FULL OUTER JOIN)."""
     common_cols = [c["name"] for c in common_col_meta]
 
     # ---- JOIN conditions (supports composite keys) ----
-    # Corner Case #3: multi-column id
     join_parts = "\n        AND ".join(
         f"p.{quote(ic)} = o.{quote(ic)}" for ic in id_columns
     )
@@ -271,7 +269,6 @@ def build_query(
     )
 
     # ---- row_diff_type CASE ----
-    # Use the first id column for the NULL side detection
     ic0 = id_columns[0]
     diff_case = (
         f"CASE\n"
@@ -286,7 +283,6 @@ def build_query(
     # ---- Source + Target SELECT casts ----
     p_cast_lines = ["        " + build_cast("p", c["name"], c["data_type"], trim_strings) + "," for c in common_col_meta]
     o_cast_lines = ["        " + build_cast("o", c["name"], c["data_type"], trim_strings) + "," for c in common_col_meta]
-    # Remove trailing comma from last line
     if p_cast_lines:
         p_cast_lines[-1] = p_cast_lines[-1].rstrip(",")
     if o_cast_lines:
@@ -295,19 +291,15 @@ def build_query(
     o_casts = "\n".join(o_cast_lines)
 
     # ---- ROW() comparison — identical ordering on both sides ----
-    # Corner Case #4: column ordering must be deterministic and identical
     p_row_cols = ", ".join(f"p.{quote(c)}" for c in common_cols)
     o_row_cols = ", ".join(f"o.{quote(c)}" for c in common_cols)
 
     # ---- UNNEST arrays — must match common_cols order exactly ----
-    # Corner Case #2: id column is NOT in these arrays
     col_name_array = ",\n            ".join(f"'{c}'" for c in common_cols)
     p_val_array = ",\n            ".join(f"d.p_{c}" for c in common_cols)
     o_val_array = ",\n            ".join(f"d.o_{c}" for c in common_cols)
 
     # ---- WHERE clause extra conditions for VALUE_MISMATCH branch ----
-    # Corner Case #11: dynamic exclude-columns and exclude-suffix.
-    # Built as inline AND clauses so they slot into the single-pass WHERE block.
     mismatch_extra_conds = []
     if exclude_cols:
         quoted_list = ", ".join(f"'{c.strip().lower()}'" for c in exclude_cols)
@@ -318,22 +310,8 @@ def build_query(
         "\n        " + "\n        ".join(mismatch_extra_conds)
     ) if mismatch_extra_conds else ""
 
-    # ---- Sentinel column — emit exactly one row per ONLY_IN record ----
-    # ONLY_IN rows are anchored to u.column_name = sentinel_col (the first common
-    # column) so the CROSS JOIN UNNEST produces exactly one row per missing key.
-    # The CASE expressions in the outer SELECT then NULL-out the column detail,
-    # matching the old UNION ALL branch — but without a second scan of the
-    # (expensive cross-catalog FULL OUTER JOIN) diff_data CTE.
     sentinel_col = common_cols[0]
-
-    # ---- SELECT id columns in final result ----
     id_select = ",\n        ".join(f"d.{ic}" for ic in id_columns)
-
-    # ORDER BY is intentionally omitted from the generated SQL.
-    # Including ORDER BY forces Trino to fully materialise the entire result set
-    # before returning a single row, consuming peak memory proportional to the
-    # full result size and preventing client-side backpressure.  Sorting is
-    # performed by the Python client after streaming the rows in chunks.
 
     query = f"""\
 WITH diff_data AS (
@@ -386,6 +364,291 @@ WHERE
     )
 """
     return query
+
+
+# Alias for backward compatibility
+build_query = build_direct_query
+
+
+# ---------------------------------------------------------------------------
+# Iceberg Staged Execution Pipeline Builders
+# ---------------------------------------------------------------------------
+
+def build_iceberg_stage_table_names(table_name: str, run_id: str) -> tuple:
+    """Generate unique temporary table names for Iceberg staging."""
+    clean_tbl = table_name.replace(".", "_")
+    clean_run = run_id.replace("-", "_").replace(".", "_")
+    src_temp = f"tmp_src_{clean_tbl}_{clean_run}"
+    tgt_temp = f"tmp_tgt_{clean_tbl}_{clean_run}"
+    mismatch_temp = f"tmp_mismatch_{clean_tbl}_{clean_run}"
+    return src_temp, tgt_temp, mismatch_temp
+
+
+def build_iceberg_stage1_ctas(
+    catalog: str,
+    schema: str,
+    table_name: str,
+    id_columns: list,
+    common_col_meta: list,
+    trim_strings: bool,
+    iceberg_catalog: str,
+    iceberg_schema: str,
+    target_temp_table: str,
+) -> str:
+    """Generate CTAS statement to ingest source or target into an Iceberg staging table with row hash."""
+    id_select = ",\n        ".join(f"{quote(ic)}" for ic in id_columns)
+    
+    col_casts = ",\n        ".join(
+        f"{build_cast_expr(c['name'], c['data_type'], trim_strings)} AS {quote(c['name'])}"
+        for c in common_col_meta
+    )
+    
+    hash_elements = ",\n            ".join(
+        f"COALESCE({build_cast_expr(c['name'], c['data_type'], trim_strings)}, CHR(0))"
+        for c in common_col_meta
+    )
+
+    query = f"""\
+CREATE TABLE {iceberg_catalog}.{iceberg_schema}.{target_temp_table}
+WITH (
+    format = 'PARQUET'
+) AS
+SELECT
+    {id_select},
+    {col_casts},
+    xxhash64(to_utf8(CONCAT_WS(CHR(31),
+        {hash_elements}
+    ))) AS row_hash
+FROM {catalog}.{schema}.{table_name}
+"""
+    return query
+
+
+def build_iceberg_stage2_missing_keys(
+    id_columns: list,
+    iceberg_catalog: str,
+    iceberg_schema: str,
+    src_temp_tbl: str,
+    tgt_temp_tbl: str,
+    diff_type: str,  # 'ONLY_IN_SOURCE' or 'ONLY_IN_TARGET'
+) -> str:
+    """Generate anti-join query to find missing records between Iceberg staging tables."""
+    if diff_type == "ONLY_IN_SOURCE":
+        primary_tbl, foreign_tbl = src_temp_tbl, tgt_temp_tbl
+    else:
+        primary_tbl, foreign_tbl = tgt_temp_tbl, src_temp_tbl
+
+    id_select = ",\n    ".join(f"p.{quote(ic)}" for ic in id_columns)
+    join_cond = " AND ".join(f"p.{quote(ic)} = f.{quote(ic)}" for ic in id_columns)
+
+    query = f"""\
+SELECT
+    {id_select},
+    '{diff_type}' AS row_diff_type,
+    CAST(NULL AS VARCHAR) AS column_name,
+    CAST(NULL AS VARCHAR) AS postgres_value,
+    CAST(NULL AS VARCHAR) AS oracle_value
+FROM {iceberg_catalog}.{iceberg_schema}.{primary_tbl} p
+WHERE NOT EXISTS (
+    SELECT 1 FROM {iceberg_catalog}.{iceberg_schema}.{foreign_tbl} f
+    WHERE {join_cond}
+)
+"""
+    return query
+
+
+def build_iceberg_stage3_mismatch_keys_ctas(
+    id_columns: list,
+    iceberg_catalog: str,
+    iceberg_schema: str,
+    src_temp_tbl: str,
+    tgt_temp_tbl: str,
+    mismatch_temp_tbl: str,
+) -> str:
+    """Generate CTAS statement isolating mismatched keys via row hash comparison."""
+    id_select = ",\n    ".join(f"s.{quote(ic)}" for ic in id_columns)
+    join_cond = " AND ".join(f"s.{quote(ic)} = t.{quote(ic)}" for ic in id_columns)
+    query = f"""\
+CREATE TABLE {iceberg_catalog}.{iceberg_schema}.{mismatch_temp_tbl}
+WITH (
+    format = 'PARQUET'
+) AS
+SELECT
+    {id_select}
+FROM {iceberg_catalog}.{iceberg_schema}.{src_temp_tbl} s
+JOIN {iceberg_catalog}.{iceberg_schema}.{tgt_temp_tbl} t
+    ON {join_cond}
+WHERE s.row_hash != t.row_hash
+"""
+    return query
+
+
+def build_iceberg_stage4_mismatch_unnest(
+    id_columns: list,
+    common_col_meta: list,
+    exclude_cols: list,
+    exclude_suffix,
+    iceberg_catalog: str,
+    iceberg_schema: str,
+    src_temp_tbl: str,
+    tgt_temp_tbl: str,
+    mismatch_temp_tbl: str,
+) -> str:
+    """Generate targeted UNNEST query for only keys that had a hash mismatch."""
+    common_cols = [c["name"] for c in common_col_meta]
+    id_select = ",\n    ".join(f"s.{quote(ic)}" for ic in id_columns)
+    join_cond_st = " AND ".join(f"s.{quote(ic)} = t.{quote(ic)}" for ic in id_columns)
+    join_cond_sm = " AND ".join(f"s.{quote(ic)} = m.{quote(ic)}" for ic in id_columns)
+
+    col_name_array = ",\n        ".join(f"'{c}'" for c in common_cols)
+    s_val_array = ",\n        ".join(f"s.{quote(c)}" for c in common_cols)
+    t_val_array = ",\n        ".join(f"t.{quote(c)}" for c in common_cols)
+
+    mismatch_extra_conds = []
+    if exclude_cols:
+        quoted_list = ", ".join(f"'{c.strip().lower()}'" for c in exclude_cols)
+        mismatch_extra_conds.append(f"AND lower(u.column_name) NOT IN ({quoted_list})")
+    if exclude_suffix:
+        mismatch_extra_conds.append(f"AND lower(u.column_name) NOT LIKE '%{exclude_suffix.strip().lower()}'")
+    mismatch_extra_conditions = (
+        "\n    " + "\n    ".join(mismatch_extra_conds)
+    ) if mismatch_extra_conds else ""
+
+    query = f"""\
+SELECT
+    {id_select},
+    'VALUE_MISMATCH' AS row_diff_type,
+    u.column_name,
+    u.postgres_value,
+    u.oracle_value
+FROM {iceberg_catalog}.{iceberg_schema}.{src_temp_tbl} s
+JOIN {iceberg_catalog}.{iceberg_schema}.{tgt_temp_tbl} t
+    ON {join_cond_st}
+JOIN {iceberg_catalog}.{iceberg_schema}.{mismatch_temp_tbl} m
+    ON {join_cond_sm}
+CROSS JOIN UNNEST(
+    ARRAY[
+        {col_name_array}
+    ],
+    ARRAY[
+        {s_val_array}
+    ],
+    ARRAY[
+        {t_val_array}
+    ]
+) AS u(column_name, postgres_value, oracle_value)
+WHERE
+    u.postgres_value IS DISTINCT FROM u.oracle_value{mismatch_extra_conditions}
+"""
+    return query
+
+
+def build_iceberg_cleanup_queries(
+    iceberg_catalog: str,
+    iceberg_schema: str,
+    src_temp_tbl: str,
+    tgt_temp_tbl: str,
+    mismatch_temp_tbl: str,
+) -> list:
+    """Generate list of DROP TABLE statements for temporary Iceberg staging tables."""
+    return [
+        f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_schema}.{src_temp_tbl}",
+        f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_schema}.{tgt_temp_tbl}",
+        f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_schema}.{mismatch_temp_tbl}",
+    ]
+
+
+def build_iceberg_pipeline_preview_sql(
+    table_name: str,
+    id_columns: list,
+    common_col_meta: list,
+    exclude_cols: list,
+    exclude_suffix,
+    trim_strings: bool,
+    pg_schema: str = "curated",
+    ora_schema: str = "curated",
+    source_catalog: str = "postgres",
+    target_catalog: str = "oracle",
+    iceberg_catalog: str = "iceberg",
+    iceberg_schema: str = "staging",
+    run_id: str = "preview",
+) -> str:
+    """Generate full annotated SQL script displaying the multi-stage Iceberg execution plan."""
+    src_temp, tgt_temp, mismatch_temp = build_iceberg_stage_table_names(table_name, run_id)
+    
+    q_src_ctas = build_iceberg_stage1_ctas(
+        catalog=source_catalog, schema=pg_schema, table_name=table_name,
+        id_columns=id_columns, common_col_meta=common_col_meta, trim_strings=trim_strings,
+        iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema, target_temp_table=src_temp
+    )
+    q_tgt_ctas = build_iceberg_stage1_ctas(
+        catalog=target_catalog, schema=ora_schema, table_name=table_name,
+        id_columns=id_columns, common_col_meta=common_col_meta, trim_strings=trim_strings,
+        iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema, target_temp_table=tgt_temp
+    )
+    q_mis_src = build_iceberg_stage2_missing_keys(
+        id_columns=id_columns, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema,
+        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, diff_type="ONLY_IN_SOURCE"
+    )
+    q_mis_tgt = build_iceberg_stage2_missing_keys(
+        id_columns=id_columns, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema,
+        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, diff_type="ONLY_IN_TARGET"
+    )
+    q_mismatch_ctas = build_iceberg_stage3_mismatch_keys_ctas(
+        id_columns=id_columns, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema,
+        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
+    )
+    q_unnest = build_iceberg_stage4_mismatch_unnest(
+        id_columns=id_columns, common_col_meta=common_col_meta, exclude_cols=exclude_cols,
+        exclude_suffix=exclude_suffix, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema,
+        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
+    )
+    cleanup = build_iceberg_cleanup_queries(iceberg_catalog, iceberg_schema, src_temp, tgt_temp, mismatch_temp)
+
+    preview = f"""\
+-- =============================================================================
+-- ICEBERG STAGED DIFF PIPELINE PLAN: {table_name}
+-- Engine: ICEBERG_STAGED | Staging: {iceberg_catalog}.{iceberg_schema}
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- STAGE 1A: Ingest Source Table into Iceberg Columnar Staging with xxhash64
+-- -----------------------------------------------------------------------------
+{q_src_ctas.strip()};
+
+-- -----------------------------------------------------------------------------
+-- STAGE 1B: Ingest Target Table into Iceberg Columnar Staging with xxhash64
+-- -----------------------------------------------------------------------------
+{q_tgt_ctas.strip()};
+
+-- -----------------------------------------------------------------------------
+-- STAGE 2A: Query Missing Records in Target (ONLY_IN_SOURCE)
+-- -----------------------------------------------------------------------------
+{q_mis_src.strip()};
+
+-- -----------------------------------------------------------------------------
+-- STAGE 2B: Query Missing Records in Source (ONLY_IN_TARGET)
+-- -----------------------------------------------------------------------------
+{q_mis_tgt.strip()};
+
+-- -----------------------------------------------------------------------------
+-- STAGE 3: Isolate Mismatched Keys into Staging via Row Checksum Hash
+-- -----------------------------------------------------------------------------
+{q_mismatch_ctas.strip()};
+
+-- -----------------------------------------------------------------------------
+-- STAGE 4: Targeted Column UNNEST (Applied ONLY to Mismatched Keys)
+-- -----------------------------------------------------------------------------
+{q_unnest.strip()};
+
+-- -----------------------------------------------------------------------------
+-- STAGE 5: Cleanup Temporary Iceberg Staging Tables
+-- -----------------------------------------------------------------------------
+{cleanup[0]};
+{cleanup[1]};
+{cleanup[2]};
+"""
+    return preview
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +708,18 @@ def main():
         ),
     )
     parser.add_argument(
+        "--engine", choices=["iceberg", "direct"], default="iceberg",
+        help="Diff execution engine: 'iceberg' (staged multi-step breakdown) or 'direct' (monolithic query). Default: 'iceberg'.",
+    )
+    parser.add_argument(
+        "--iceberg-catalog", default="iceberg",
+        help="Iceberg catalog name in Trino (default: 'iceberg').",
+    )
+    parser.add_argument(
+        "--iceberg-schema", default="staging",
+        help="Iceberg staging schema in Trino (default: 'staging').",
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="Print metadata, gap report, type warnings, and column counts before the query.",
     )
@@ -473,6 +748,9 @@ def main():
     exclude_suffix = args.exclude_suffix.strip() or None
     trim_strings = args.trim_strings
     verbose = args.verbose
+    engine = args.engine
+    iceberg_catalog = args.iceberg_catalog
+    iceberg_schema = args.iceberg_schema
 
     # ------------------------------------------------------------------
     # Connect and fetch metadata
@@ -548,12 +826,12 @@ def main():
     # ------------------------------------------------------------------
     # Corner Case #12: ROW() field limit warning
     # ------------------------------------------------------------------
-    if len(common_names) > ROW_FIELD_LIMIT_WARNING:
+    if len(common_names) > ROW_FIELD_LIMIT_WARNING and engine == "direct":
         print(
             f"[WARN] {len(common_names)} columns will be placed into the ROW() comparison struct "
             f"(connector hard limit is typically ~{ROW_FIELD_HARD_LIMIT} fields). "
-            f"If you see 'Too many fields in row type' errors, reduce column count with "
-            f"--exclude-columns or --exclude-suffix.\n"
+            f"If you see 'Too many fields in row type' errors, switch to --engine iceberg "
+            f"or reduce column count with --exclude-columns.\n"
         )
 
     # ------------------------------------------------------------------
@@ -573,18 +851,34 @@ def main():
     # ------------------------------------------------------------------
     # Build and output the query
     # ------------------------------------------------------------------
-    query = build_query(
-        table_name=table_name,
-        id_columns=id_columns,
-        common_col_meta=common_col_meta,
-        exclude_cols=exclude_cols,
-        exclude_suffix=exclude_suffix,
-        trim_strings=trim_strings,
-        pg_schema=pg_schema,
-        ora_schema=ora_schema,
-        source_catalog=source_catalog,
-        target_catalog=target_catalog,
-    )
+    if engine == "iceberg":
+        query = build_iceberg_pipeline_preview_sql(
+            table_name=table_name,
+            id_columns=id_columns,
+            common_col_meta=common_col_meta,
+            exclude_cols=exclude_cols,
+            exclude_suffix=exclude_suffix,
+            trim_strings=trim_strings,
+            pg_schema=pg_schema,
+            ora_schema=ora_schema,
+            source_catalog=source_catalog,
+            target_catalog=target_catalog,
+            iceberg_catalog=iceberg_catalog,
+            iceberg_schema=iceberg_schema,
+        )
+    else:
+        query = build_direct_query(
+            table_name=table_name,
+            id_columns=id_columns,
+            common_col_meta=common_col_meta,
+            exclude_cols=exclude_cols,
+            exclude_suffix=exclude_suffix,
+            trim_strings=trim_strings,
+            pg_schema=pg_schema,
+            ora_schema=ora_schema,
+            source_catalog=source_catalog,
+            target_catalog=target_catalog,
+        )
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
@@ -592,7 +886,7 @@ def main():
         print(f"[INFO] Query written to: {args.output}")
     else:
         print("\n" + "=" * 70)
-        print("GENERATED TRINO DIFF QUERY")
+        print(f"GENERATED TRINO DIFF PLAN ({engine.upper()} ENGINE)")
         print("=" * 70 + "\n")
         print(query)
 

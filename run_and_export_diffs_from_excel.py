@@ -540,6 +540,7 @@ def main():
             "--exclude-columns", "extraction_timestamp",
             "--exclude-suffix", "key",
             "--trim-strings",
+            "--engine", "direct",
             "--output", os.path.join(WORKING_DIR, sql_file)
         ])
 

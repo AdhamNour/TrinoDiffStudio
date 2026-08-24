@@ -537,23 +537,43 @@ class BackendController(QObject):
             exclude_cols = [c.strip().lower() for c in raw_exclude_cols.split(",") if c.strip()]
             exclude_suf = raw_exclude_suf.strip().lower() or None
 
-            query = generate_trino_diff.build_query(
-                table_name=clean_table,
-                id_columns=id_cols,
-                common_col_meta=common_col_meta,
-                exclude_cols=exclude_cols,
-                exclude_suffix=exclude_suf,
-                trim_strings=trim_strings_val,
-                pg_schema=pg_sch,
-                ora_schema=ora_sch,
-                source_catalog=src,
-                target_catalog=tgt,
-            )
+            diff_engine = self._config.get("diff_engine", "iceberg").lower()
+            iceberg_catalog = self._config.get("iceberg_catalog", "iceberg")
+            iceberg_staging_schema = self._config.get("iceberg_staging_schema", "staging")
+
+            if diff_engine == "iceberg":
+                query = generate_trino_diff.build_iceberg_pipeline_preview_sql(
+                    table_name=clean_table,
+                    id_columns=id_cols,
+                    common_col_meta=common_col_meta,
+                    exclude_cols=exclude_cols,
+                    exclude_suffix=exclude_suf,
+                    trim_strings=trim_strings_val,
+                    pg_schema=pg_sch,
+                    ora_schema=ora_sch,
+                    source_catalog=src,
+                    target_catalog=tgt,
+                    iceberg_catalog=iceberg_catalog,
+                    iceberg_schema=iceberg_staging_schema,
+                )
+            else:
+                query = generate_trino_diff.build_direct_query(
+                    table_name=clean_table,
+                    id_columns=id_cols,
+                    common_col_meta=common_col_meta,
+                    exclude_cols=exclude_cols,
+                    exclude_suffix=exclude_suf,
+                    trim_strings=trim_strings_val,
+                    pg_schema=pg_sch,
+                    ora_schema=ora_sch,
+                    source_catalog=src,
+                    target_catalog=tgt,
+                )
             cursor.close()
             conn.close()
 
             self.sqlPreviewReady.emit(clean_table, query)
-            self.appendLog("SUCCESS", f"SQL query generated for {clean_table}")
+            self.appendLog("SUCCESS", f"SQL plan generated for {clean_table} ({diff_engine.upper()} engine)")
 
         except Exception as e:
             self.appendLog("ERROR", f"SQL preview error: {e}")
@@ -1110,6 +1130,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
     # Settings
     # -----------------------------------------------------------------------
 
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool, str, str, str, bool)
     @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool)
     @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str, str, bool)
     def updateSettings(
@@ -1130,7 +1151,11 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         ollama_url: str = "http://localhost:11434",
         ollama_model: str = "qwen2.5-coder:1.5b",
         ai_effort: str = "High",
-        auto_ai: bool = True
+        auto_ai: bool = True,
+        diff_engine: str = "iceberg",
+        iceberg_catalog: str = "iceberg",
+        iceberg_staging_schema: str = "staging",
+        iceberg_cleanup_on_error: bool = True,
     ):
         if isinstance(enable_ai_diagnosis, str):
             # Called with old 16-parameter overload (where arg 13 was ollama_url)
@@ -1163,6 +1188,10 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         self._config["ollama_model"] = real_ollama_model
         self._config["ai_effort"] = real_ai_effort
         self._config["auto_ai_diagnosis"] = real_auto_ai
+        self._config["diff_engine"] = diff_engine.strip().lower() if isinstance(diff_engine, str) else "iceberg"
+        self._config["iceberg_catalog"] = iceberg_catalog.strip() if isinstance(iceberg_catalog, str) else "iceberg"
+        self._config["iceberg_staging_schema"] = iceberg_staging_schema.strip() if isinstance(iceberg_staging_schema, str) else "staging"
+        self._config["iceberg_cleanup_on_error"] = bool(iceberg_cleanup_on_error)
 
         save_config(self._config)
         self.configChanged.emit()

@@ -7,7 +7,7 @@ except ImportError:
     trino = None
 
 
-def get_trino_connection(host: str = "localhost", port: int = 8080, user: str = "admin", http_scheme: str = "http"):
+def get_trino_connection(host: str = "localhost", port: int = 8080, user: str = "admin", http_scheme: str = "http", request_timeout: int = 3600):
     """Establish and return a Trino connection."""
     if trino is None:
         raise ImportError("The 'trino' Python package is not installed. Install it with: pip install trino")
@@ -16,14 +16,14 @@ def get_trino_connection(host: str = "localhost", port: int = 8080, user: str = 
         port=port,
         user=user,
         http_scheme=http_scheme,
-        request_timeout=3600,  # 1-hour cap; raises instead of hanging if the pod dies mid-query
+        request_timeout=request_timeout,  # default 1-hour cap for long queries, overrideable for fast probes
     )
 
 
-def test_trino_connection(host: str, port: int, user: str, http_scheme: str = "http") -> Tuple[bool, str]:
-    """Test Trino connectivity with a lightweight query."""
+def test_trino_connection(host: str, port: int, user: str, http_scheme: str = "http", timeout: int = 5) -> Tuple[bool, str]:
+    """Test Trino connectivity with a lightweight query and fast failover timeout."""
     try:
-        conn = get_trino_connection(host=host, port=port, user=user, http_scheme=http_scheme)
+        conn = get_trino_connection(host=host, port=port, user=user, http_scheme=http_scheme, request_timeout=timeout)
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         cursor.fetchone()
@@ -34,10 +34,10 @@ def test_trino_connection(host: str, port: int, user: str, http_scheme: str = "h
         return False, str(e)
 
 
-def fetch_trino_catalogs(host: str, port: int, user: str, http_scheme: str = "http") -> Tuple[bool, List[str], str]:
-    """Run SHOW CATALOGS to retrieve all active catalogs in Trino."""
+def fetch_trino_catalogs(host: str, port: int, user: str, http_scheme: str = "http", timeout: int = 8) -> Tuple[bool, List[str], str]:
+    """Run SHOW CATALOGS to retrieve all active catalogs in Trino with quick timeout."""
     try:
-        conn = get_trino_connection(host=host, port=port, user=user, http_scheme=http_scheme)
+        conn = get_trino_connection(host=host, port=port, user=user, http_scheme=http_scheme, request_timeout=timeout)
         cursor = conn.cursor()
         cursor.execute("SHOW CATALOGS")
         rows = cursor.fetchall()
@@ -71,9 +71,32 @@ def fetch_columns_for_table(
     host: str,
     port: int,
     user: str,
-    http_scheme: str = "http"
+    http_scheme: str = "http",
+    exclude_cols: List[str] = None,
+    exclude_suffix: str = None,
+    id_columns: List[str] = None,
 ) -> Tuple[Optional[str], List[dict]]:
-    """Query information_schema to find columns and resolved schema for table."""
+    """Query information_schema to find columns and resolved schema for table with early exclusion filtering."""
+    id_set = {ic.strip().lower() for ic in (id_columns or []) if ic and ic.strip()}
+    excluded_set = {c.strip().lower() for c in (exclude_cols or []) if c and c.strip()}
+    suf_lower = exclude_suffix.strip().lower() if exclude_suffix and exclude_suffix.strip() else None
+
+    def _filter_cols(raw_cols):
+        if not excluded_set and not suf_lower:
+            return raw_cols
+        filtered = []
+        for c in raw_cols:
+            cname = c["name"].lower()
+            if cname in id_set:
+                filtered.append(c)
+                continue
+            if cname in excluded_set:
+                continue
+            if suf_lower and cname.endswith(suf_lower):
+                continue
+            filtered.append(c)
+        return filtered
+
     try:
         conn = get_trino_connection(host=host, port=port, user=user, http_scheme=http_scheme)
         cursor = conn.cursor()
@@ -91,7 +114,7 @@ def fetch_columns_for_table(
                 cols = [{"name": r[0], "data_type": r[1].lower()} for r in rows]
                 cursor.close()
                 conn.close()
-                return sch, cols
+                return sch, _filter_cols(cols)
         cursor.close()
         conn.close()
     except Exception:

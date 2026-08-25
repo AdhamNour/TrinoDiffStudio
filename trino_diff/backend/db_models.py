@@ -130,7 +130,7 @@ class BatchTableResultModel(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     batch_id = Column(String(100), ForeignKey("batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
-    table_name = Column(String(255), nullable=False)
+    table_name = Column(String(255), nullable=False, index=True)
     status = Column(String(50), nullable=False)
     diff_count = Column(Integer, default=0)
     id_columns_json = Column(Text)
@@ -179,7 +179,7 @@ class OutputFileModel(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     batch_id = Column(String(100), ForeignKey("batches.batch_id", ondelete="SET NULL"), nullable=True, index=True)
-    table_name = Column(String(255))
+    table_name = Column(String(255), index=True)
     file_name = Column(String(255), nullable=False)
     file_path = Column(Text, nullable=False, unique=True)
     file_type = Column(String(50), nullable=False)

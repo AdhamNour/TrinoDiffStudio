@@ -115,26 +115,81 @@ def get_trino_connection():
     )
 
 
-def fetch_columns(cursor, catalog: str, table_name: str, schema: str = None) -> tuple:
+def fetch_columns(
+    cursor,
+    catalog: str,
+    table_name: str,
+    schema: str = None,
+    exclude_cols: list = None,
+    exclude_suffix: str = None,
+    id_columns: list = None,
+) -> tuple:
     """
-    Fetch column metadata (name + data_type) from information_schema.
-    If schema is not specified, tries DEFAULT_SCHEMAS ('curated', 'rdm') in order.
+    Fetch column metadata (name + data_type) from information_schema in a single roundtrip,
+    filtering out excluded column names and suffixes early at metadata retrieval time.
+    If schema is not specified, tries DEFAULT_SCHEMAS ('curated', 'rdm') in precedence order.
     Returns a tuple: (schema_found, [{'name': str, 'data_type': str}, ...])
     """
-    schemas_to_try = [schema] if schema else DEFAULT_SCHEMAS
-    for sch in schemas_to_try:
+    id_set = {ic.strip().lower() for ic in (id_columns or []) if ic and ic.strip()}
+    excluded_set = {c.strip().lower() for c in (exclude_cols or []) if c and c.strip()}
+    suf_lower = exclude_suffix.strip().lower() if exclude_suffix and exclude_suffix.strip() else None
+
+    def _filter_cols(raw_cols):
+        if not excluded_set and not suf_lower:
+            return raw_cols
+        filtered = []
+        for c in raw_cols:
+            cname = c["name"].lower()
+            # Always preserve designated ID / Business key columns
+            if cname in id_set:
+                filtered.append(c)
+                continue
+            if cname in excluded_set:
+                continue
+            if suf_lower and cname.endswith(suf_lower):
+                continue
+            filtered.append(c)
+        return filtered
+
+    if schema:
         sql = (
             "SELECT column_name, data_type "
             f"FROM {catalog}.information_schema.columns "
-            f"WHERE table_schema = '{sch}' "
+            f"WHERE table_schema = '{schema}' "
             f"  AND table_name   = '{table_name}' "
             "ORDER BY ordinal_position"
         )
         cursor.execute(sql)
         rows = cursor.fetchall()
         if rows:
-            return sch, [{"name": row[0], "data_type": row[1].lower()} for row in rows]
-    return (schema or schemas_to_try[0]), []
+            cols = [{"name": row[0], "data_type": row[1].lower()} for row in rows]
+            return schema, _filter_cols(cols)
+        return schema, []
+
+    schemas_in = ", ".join(f"'{s}'" for s in DEFAULT_SCHEMAS)
+    sql = (
+        "SELECT table_schema, column_name, data_type "
+        f"FROM {catalog}.information_schema.columns "
+        f"WHERE table_schema IN ({schemas_in}) "
+        f"  AND table_name = '{table_name}' "
+        "ORDER BY ordinal_position"
+    )
+    cursor.execute(sql)
+    rows = cursor.fetchall()
+    if not rows:
+        return DEFAULT_SCHEMAS[0], []
+
+    by_schema = {}
+    for r in rows:
+        sch_name, col_name, dt = r[0], r[1], r[2].lower()
+        by_schema.setdefault(sch_name, []).append({"name": col_name, "data_type": dt})
+
+    for sch in DEFAULT_SCHEMAS:
+        if sch in by_schema:
+            return sch, _filter_cols(by_schema[sch])
+
+    first_found = next(iter(by_schema))
+    return first_found, _filter_cols(by_schema[first_found])
 
 
 # ---------------------------------------------------------------------------
@@ -786,7 +841,12 @@ def main():
         c = get_trino_connection()
         cur = c.cursor()
         try:
-            return fetch_columns(cur, cat, table_name, schema)
+            return fetch_columns(
+                cur, cat, table_name, schema,
+                exclude_cols=exclude_cols,
+                exclude_suffix=exclude_suffix,
+                id_columns=id_columns
+            )
         finally:
             try:
                 cur.close()

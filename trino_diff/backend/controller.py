@@ -71,6 +71,7 @@ class BackendController(QObject):
         self._worker = None
         self._ai_thread = None
         self._ai_worker = None
+        self._ai_semaphore = threading.Semaphore(1)
 
         # Initial startup log
         self.appendLog("INFO", "Trino Diff Studio initialized. System ready.")
@@ -512,84 +513,95 @@ class BackendController(QObject):
 
         self.appendLog("INFO", f"Generating SQL Preview for {clean_table}...")
 
-        try:
-            def _fetch_preview_meta(cat):
-                c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
-                cur = c.cursor()
-                try:
-                    return generate_trino_diff.fetch_columns(cur, cat, clean_table, sch)
-                finally:
+        def _preview_task():
+            try:
+                raw_exclude_cols = exclude_cols_str if exclude_cols_str is not None else self._config.get("exclude_columns", "")
+                raw_exclude_suf = exclude_suf_str if exclude_suf_str is not None else self._config.get("exclude_suffix", "")
+                trim_strings_val = trim_strings if trim_strings is not None else self._config.get("trim_strings", True)
+
+                exclude_cols = [c.strip().lower() for c in raw_exclude_cols.split(",") if c.strip()]
+                exclude_suf = raw_exclude_suf.strip().lower() or None
+
+                def _fetch_preview_meta(cat):
+                    c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+                    cur = c.cursor()
                     try:
-                        cur.close()
-                        c.close()
-                    except Exception:
-                        pass
+                        return generate_trino_diff.fetch_columns(
+                            cur,
+                            cat,
+                            clean_table,
+                            sch,
+                            exclude_cols=exclude_cols,
+                            exclude_suffix=exclude_suf,
+                            id_columns=id_cols
+                        )
+                    finally:
+                        try:
+                            cur.close()
+                            c.close()
+                        except Exception:
+                            pass
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                fut_pg = executor.submit(_fetch_preview_meta, src)
-                fut_ora = executor.submit(_fetch_preview_meta, tgt)
-                pg_sch, pg_cols = fut_pg.result()
-                ora_sch, ora_cols = fut_ora.result()
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    fut_pg = executor.submit(_fetch_preview_meta, src)
+                    fut_ora = executor.submit(_fetch_preview_meta, tgt)
+                    pg_sch, pg_cols = fut_pg.result()
+                    ora_sch, ora_cols = fut_ora.result()
 
-            if not pg_cols or not ora_cols:
-                raise ValueError(f"Table columns could not be found in {src} or {tgt}.")
+                if not pg_cols or not ora_cols:
+                    raise ValueError(f"Table columns could not be found in {src} or {tgt}.")
 
-            pg_name_map = {c["name"]: c for c in pg_cols}
-            ora_name_map = {c["name"]: c for c in ora_cols}
-            id_col_set = set(id_cols)
-            common_names = sorted((set(pg_name_map.keys()) & set(ora_name_map.keys())) - id_col_set)
+                pg_name_map = {c["name"]: c for c in pg_cols}
+                ora_name_map = {c["name"]: c for c in ora_cols}
+                id_col_set = set(id_cols)
+                common_names = sorted((set(pg_name_map.keys()) & set(ora_name_map.keys())) - id_col_set)
 
-            if not common_names:
-                raise ValueError("No common comparison columns found.")
+                if not common_names:
+                    raise ValueError("No common comparison columns found.")
 
-            common_col_meta = [{"name": n, "data_type": pg_name_map[n]["data_type"]} for n in common_names]
+                common_col_meta = [{"name": n, "data_type": pg_name_map[n]["data_type"]} for n in common_names]
 
-            raw_exclude_cols = exclude_cols_str if exclude_cols_str is not None else self._config.get("exclude_columns", "")
-            raw_exclude_suf = exclude_suf_str if exclude_suf_str is not None else self._config.get("exclude_suffix", "")
-            trim_strings_val = trim_strings if trim_strings is not None else self._config.get("trim_strings", True)
+                diff_engine = self._config.get("diff_engine", "iceberg").lower()
+                iceberg_catalog = self._config.get("iceberg_catalog", "iceberg")
+                iceberg_staging_schema = self._config.get("iceberg_staging_schema", "staging")
 
-            exclude_cols = [c.strip().lower() for c in raw_exclude_cols.split(",") if c.strip()]
-            exclude_suf = raw_exclude_suf.strip().lower() or None
+                if diff_engine == "iceberg":
+                    query = generate_trino_diff.build_iceberg_pipeline_preview_sql(
+                        table_name=clean_table,
+                        id_columns=id_cols,
+                        common_col_meta=common_col_meta,
+                        exclude_cols=exclude_cols,
+                        exclude_suffix=exclude_suf,
+                        trim_strings=trim_strings_val,
+                        pg_schema=pg_sch,
+                        ora_schema=ora_sch,
+                        source_catalog=src,
+                        target_catalog=tgt,
+                        iceberg_catalog=iceberg_catalog,
+                        iceberg_schema=iceberg_staging_schema,
+                    )
+                else:
+                    query = generate_trino_diff.build_direct_query(
+                        table_name=clean_table,
+                        id_columns=id_cols,
+                        common_col_meta=common_col_meta,
+                        exclude_cols=exclude_cols,
+                        exclude_suffix=exclude_suf,
+                        trim_strings=trim_strings_val,
+                        pg_schema=pg_sch,
+                        ora_schema=ora_sch,
+                        source_catalog=src,
+                        target_catalog=tgt,
+                    )
+                self.sqlPreviewReady.emit(clean_table, query)
+                self.appendLog("SUCCESS", f"SQL plan generated for {clean_table} ({diff_engine.upper()} engine)")
 
-            diff_engine = self._config.get("diff_engine", "iceberg").lower()
-            iceberg_catalog = self._config.get("iceberg_catalog", "iceberg")
-            iceberg_staging_schema = self._config.get("iceberg_staging_schema", "staging")
+            except Exception as e:
+                self.appendLog("ERROR", f"SQL preview error: {e}")
+                self.notificationEmitted.emit("error", f"Could not generate SQL preview: {e}")
+                self._notifier.notify("SQL Preview Failed", f"Could not generate SQL preview for {clean_table}: {e}", level="error")
 
-            if diff_engine == "iceberg":
-                query = generate_trino_diff.build_iceberg_pipeline_preview_sql(
-                    table_name=clean_table,
-                    id_columns=id_cols,
-                    common_col_meta=common_col_meta,
-                    exclude_cols=exclude_cols,
-                    exclude_suffix=exclude_suf,
-                    trim_strings=trim_strings_val,
-                    pg_schema=pg_sch,
-                    ora_schema=ora_sch,
-                    source_catalog=src,
-                    target_catalog=tgt,
-                    iceberg_catalog=iceberg_catalog,
-                    iceberg_schema=iceberg_staging_schema,
-                )
-            else:
-                query = generate_trino_diff.build_direct_query(
-                    table_name=clean_table,
-                    id_columns=id_cols,
-                    common_col_meta=common_col_meta,
-                    exclude_cols=exclude_cols,
-                    exclude_suffix=exclude_suf,
-                    trim_strings=trim_strings_val,
-                    pg_schema=pg_sch,
-                    ora_schema=ora_sch,
-                    source_catalog=src,
-                    target_catalog=tgt,
-                )
-            self.sqlPreviewReady.emit(clean_table, query)
-            self.appendLog("SUCCESS", f"SQL plan generated for {clean_table} ({diff_engine.upper()} engine)")
-
-        except Exception as e:
-            self.appendLog("ERROR", f"SQL preview error: {e}")
-            self.notificationEmitted.emit("error", f"Could not generate SQL preview: {e}")
-            self._notifier.notify("SQL Preview Failed", f"Could not generate SQL preview for {clean_table}: {e}", level="error")
+        threading.Thread(target=_preview_task, daemon=True).start()
 
     # -----------------------------------------------------------------------
     # Output Files & Batch History Management
@@ -623,8 +635,9 @@ class BackendController(QObject):
             self.outputFilesChanged.emit()
             return
 
-        # Otherwise, scan disk directory and synchronize with SQLite
+        # Otherwise, scan disk directory and synchronize with SQLite in bulk
         files = []
+        bulk_entries = []
         if os.path.exists(output_dir):
             for fn in sorted(os.listdir(output_dir), reverse=True):
                 fp = os.path.join(output_dir, fn)
@@ -641,8 +654,12 @@ class BackendController(QObject):
                         else:
                             ftype = "SQL"
 
-                        # Index into SQLite if missing
-                        self.db.record_output_file(None, None, fp, ftype)
+                        bulk_entries.append({
+                            "batch_id": None,
+                            "table_name": None,
+                            "file_path": fp,
+                            "file_type": ftype
+                        })
 
                         files.append({
                             "name": fn,
@@ -651,6 +668,9 @@ class BackendController(QObject):
                             "size": f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 1)} MB",
                             "modified": mod_time,
                         })
+
+        if bulk_entries:
+            self.db.record_output_files_bulk(bulk_entries)
 
         self._output_files = files
         self.outputFilesChanged.emit()
@@ -948,14 +968,15 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
                         t["ai_prompt"] = full_logged_prompt
                         break
 
-                res = query_ollama(
-                    prompt=user_prompt,
-                    system=system_prompt,
-                    model=model,
-                    base_url=ollama_url,
-                    timeout=120,
-                    effort=effort
-                )
+                with self._ai_semaphore:
+                    res = query_ollama(
+                        prompt=user_prompt,
+                        system=system_prompt,
+                        model=model,
+                        base_url=ollama_url,
+                        timeout=120,
+                        effort=effort
+                    )
 
                 if res["success"]:
                     explanation = res["response"]

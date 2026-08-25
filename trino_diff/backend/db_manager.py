@@ -426,6 +426,68 @@ class DatabaseManager:
         finally:
             session.close()
 
+    def record_output_files_bulk(
+        self,
+        file_entries: List[Dict[str, Any]]
+    ) -> bool:
+        """Bulk upsert output file records in a single SQLite transaction."""
+        if not file_entries:
+            return True
+        session = self.get_session()
+        try:
+            valid_entries = [e for e in file_entries if os.path.exists(e.get("file_path", ""))]
+            if not valid_entries:
+                return True
+
+            paths = [e["file_path"] for e in valid_entries]
+            existing_records = {
+                rec.file_path: rec
+                for rec in session.query(OutputFileModel).filter(OutputFileModel.file_path.in_(paths)).all()
+            }
+            new_files = []
+            now_dt = datetime.utcnow()
+
+            for entry in valid_entries:
+                fp = entry["file_path"]
+                try:
+                    file_size = os.path.getsize(fp)
+                except Exception:
+                    file_size = 0
+                file_name = os.path.basename(fp)
+                batch_id = entry.get("batch_id")
+                table_name = entry.get("table_name", "")
+                file_type = entry.get("file_type", "SQL")
+
+                if fp in existing_records:
+                    rec = existing_records[fp]
+                    if batch_id:
+                        rec.batch_id = batch_id
+                    if table_name:
+                        rec.table_name = table_name
+                    rec.file_size_bytes = file_size
+                    rec.created_at = now_dt
+                else:
+                    new_files.append(OutputFileModel(
+                        batch_id=batch_id,
+                        table_name=table_name or "",
+                        file_name=file_name,
+                        file_path=fp,
+                        file_type=file_type,
+                        file_size_bytes=file_size,
+                        created_at=now_dt
+                    ))
+
+            if new_files:
+                session.bulk_save_objects(new_files)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            print(f"[SQLAlchemy Error] record_output_files_bulk failed: {e}")
+            return False
+        finally:
+            session.close()
+
     # =========================================================================
     # Query Methods for UI (ORM)
     # =========================================================================

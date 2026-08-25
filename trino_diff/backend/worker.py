@@ -40,32 +40,37 @@ def _apply_header(ws, headers: list, header_fill_hex: str = "1F3864"):
 def _style_data_rows(ws, df: pd.DataFrame):
     from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
     DIFF_FILLS = {
-        "VALUE_MISMATCH":   "FFF2CC",
-        "ONLY_IN_POSTGRES": "D9E1F2",
-        "ONLY_IN_ORACLE":   "FCE4D6",
-        "ONLY_IN_SOURCE":   "D9E1F2",
-        "ONLY_IN_TARGET":   "FCE4D6",
+        "VALUE_MISMATCH":   PatternFill("solid", fgColor="FFF2CC"),
+        "ONLY_IN_POSTGRES": PatternFill("solid", fgColor="D9E1F2"),
+        "ONLY_IN_ORACLE":   PatternFill("solid", fgColor="FCE4D6"),
+        "ONLY_IN_SOURCE":   PatternFill("solid", fgColor="D9E1F2"),
+        "ONLY_IN_TARGET":   PatternFill("solid", fgColor="FCE4D6"),
     }
-    BAND_EVEN = "F2F2F2"
-    MISMATCH_CELL = "FFCC00"
+    FILL_BAND_EVEN = PatternFill("solid", fgColor="F2F2F2")
+    FILL_MISMATCH_CELL = PatternFill("solid", fgColor="FFCC00")
 
     thin = Side(style="thin", color="DDDDDD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     base_font = Font(name="Calibri", size=10)
+    align_top = Alignment(vertical="top", wrap_text=False)
 
     columns = list(df.columns)
     diff_type_idx  = columns.index("row_diff_type") + 1 if "row_diff_type" in columns else None
     pg_val_idx     = columns.index("postgres_value") + 1 if "postgres_value" in columns else None
     ora_val_idx    = columns.index("oracle_value") + 1 if "oracle_value" in columns else None
 
-    for row_offset, row_data in enumerate(df.itertuples(index=False), start=2):
+    # Cap styling iteration for extremely large files to prevent openpyxl OOM
+    MAX_STYLE_ROWS = 50000
+    df_to_style = df if len(df) <= MAX_STYLE_ROWS else df.head(MAX_STYLE_ROWS)
+
+    for row_offset, row_data in enumerate(df_to_style.itertuples(index=False), start=2):
         row_dict = row_data._asdict()
         diff_type = row_dict.get("row_diff_type", "")
 
         if diff_type in DIFF_FILLS:
-            row_fill = PatternFill("solid", fgColor=DIFF_FILLS[diff_type])
+            row_fill = DIFF_FILLS[diff_type]
         elif row_offset % 2 == 0:
-            row_fill = PatternFill("solid", fgColor=BAND_EVEN)
+            row_fill = FILL_BAND_EVEN
         else:
             row_fill = None
 
@@ -73,7 +78,7 @@ def _style_data_rows(ws, df: pd.DataFrame):
             cell = ws.cell(row=row_offset, column=col_idx)
             cell.font = base_font
             cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=False)
+            cell.alignment = align_top
             if row_fill:
                 cell.fill = row_fill
 
@@ -82,17 +87,19 @@ def _style_data_rows(ws, df: pd.DataFrame):
             ora_val = ws.cell(row=row_offset, column=ora_val_idx).value
             if pg_val != ora_val:
                 for cidx in (pg_val_idx, ora_val_idx):
-                    ws.cell(row=row_offset, column=cidx).fill = PatternFill("solid", fgColor=MISMATCH_CELL)
+                    ws.cell(row=row_offset, column=cidx).fill = FILL_MISMATCH_CELL
 
 
 def _auto_column_widths(ws, df: pd.DataFrame, max_width: int = 60, min_width: int = 12):
     from openpyxl.utils import get_column_letter
     if df.empty or len(df.columns) == 0:
         return
+    # Use a representative sample for column width estimation to avoid scanning millions of rows
+    sample_df = df.head(1000) if len(df) > 1000 else df
     for col_idx, col_name in enumerate(df.columns, start=1):
         header_len = len(str(col_name))
         try:
-            lens = df[col_name].dropna().astype(str).str.len()
+            lens = sample_df[col_name].dropna().astype(str).str.len()
             max_val = lens.max() if len(lens) > 0 else 0
             max_data_len = int(max_val) if pd.notna(max_val) else 0
         except Exception:
@@ -287,16 +294,19 @@ def _write_missing_records_sheet(wb, sheet_name: str, df_missing: pd.DataFrame, 
     thin = Side(style="thin", color="DDDDDD")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     base_font = Font(name="Calibri", size=10)
+    align_top = Alignment(vertical="top", wrap_text=False)
 
     for row_tuple in df_missing[display_cols].itertuples(index=False):
         ws.append(list(row_tuple))
 
-    for row_idx in range(2, len(df_missing) + 2):
+    MAX_STYLE_ROWS = 50000
+    rows_to_style = min(len(df_missing), MAX_STYLE_ROWS)
+    for row_idx in range(2, rows_to_style + 2):
         for col_idx in range(1, len(display_cols) + 1):
             cell = ws.cell(row=row_idx, column=col_idx)
             cell.font = base_font
             cell.border = border
-            cell.alignment = Alignment(vertical="top", wrap_text=False)
+            cell.alignment = align_top
             cell.fill = row_fill
 
     _auto_column_widths(ws, df_missing[display_cols])
@@ -374,15 +384,16 @@ def execute_and_wait(cursor, sql: str, check_cancelled=None):
         cursor.fetchall()
 
 
-def fetch_all_dataframe(cursor, check_cancelled=None, chunk_size: int = 5000) -> pd.DataFrame:
+def fetch_all_dataframe(cursor, check_cancelled=None, chunk_size: int = 25000) -> pd.DataFrame:
     """
     Streams all rows from an already-executed cursor into a DataFrame.
     A TrinoKeepalive heartbeat thread runs in the background so the coordinator
     never marks the query ABANDONED while Python is busy building the DataFrame.
+    Optimized to accumulate row tuples in a single flat list before DataFrame instantiation.
     """
     with TrinoKeepalive(cursor, check_cancelled=check_cancelled):
         col_names = [d[0] for d in cursor.description] if cursor.description else []
-        _chunks = []
+        all_rows = []
         while True:
             if check_cancelled and check_cancelled():
                 try:
@@ -393,8 +404,8 @@ def fetch_all_dataframe(cursor, check_cancelled=None, chunk_size: int = 5000) ->
             _batch = cursor.fetchmany(chunk_size)
             if not _batch:
                 break
-            _chunks.append(pd.DataFrame(_batch, columns=col_names))
-        return pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
+            all_rows.extend(_batch)
+        return pd.DataFrame(all_rows, columns=col_names) if all_rows else pd.DataFrame(columns=col_names)
 
 
 class TrinoKeepalive:
@@ -604,7 +615,15 @@ class TrinoDiffWorker(QObject):
                 t_cur = t_conn.cursor()
                 self._register_cursor(t_cur)
                 try:
-                    return generate_trino_diff.fetch_columns(t_cur, catalog, table_name, schema_override)
+                    return generate_trino_diff.fetch_columns(
+                        t_cur,
+                        catalog,
+                        table_name,
+                        schema_override,
+                        exclude_cols=exclude_cols,
+                        exclude_suffix=exclude_suf,
+                        id_columns=id_cols
+                    )
                 finally:
                     self._unregister_cursor(t_cur)
                     try:

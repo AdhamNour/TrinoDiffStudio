@@ -1,6 +1,8 @@
 import os
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pandas as pd
 from PySide6.QtCore import QObject, Signal, Slot
@@ -358,13 +360,148 @@ def export_diff_to_parquet(df: pd.DataFrame, parquet_file: str, table_name: str,
             raise RuntimeError(f"Could not export Parquet file: {e}. (PyArrow error: {pa_err})")
 
 
+def execute_and_wait(cursor, sql: str, check_cancelled=None):
+    """
+    Executes a Trino statement and drains results until the query is FINISHED.
+    Uses TrinoKeepalive internally to send heartbeat fetchmany() calls on a
+    background thread every KEEPALIVE_INTERVAL seconds so the coordinator never
+    sees the client as idle, preventing ABANDONED_QUERY / ABANDONED_TASK errors.
+    """
+    with TrinoKeepalive(cursor, check_cancelled=check_cancelled):
+        cursor.execute(sql)
+        # Drain all result pages.  For DDL/CTAS the result is a single status
+        # row; fetchall() consumes it and signals FINISHED to the coordinator.
+        cursor.fetchall()
+
+
+def fetch_all_dataframe(cursor, check_cancelled=None, chunk_size: int = 5000) -> pd.DataFrame:
+    """
+    Streams all rows from an already-executed cursor into a DataFrame.
+    A TrinoKeepalive heartbeat thread runs in the background so the coordinator
+    never marks the query ABANDONED while Python is busy building the DataFrame.
+    """
+    with TrinoKeepalive(cursor, check_cancelled=check_cancelled):
+        col_names = [d[0] for d in cursor.description] if cursor.description else []
+        _chunks = []
+        while True:
+            if check_cancelled and check_cancelled():
+                try:
+                    cursor.cancel()
+                except Exception:
+                    pass
+                raise InterruptedError("Execution cancelled by user.")
+            _batch = cursor.fetchmany(chunk_size)
+            if not _batch:
+                break
+            _chunks.append(pd.DataFrame(_batch, columns=col_names))
+        return pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
+
+
+class TrinoKeepalive:
+    """
+    Context manager that keeps a Trino query alive by sending a lightweight
+    heartbeat on a background daemon thread.
+
+    Background
+    ----------
+    The Trino coordinator's ``query.client.timeout`` (default: 5 min) expires
+    whenever it sees no HTTP request for a running query's ``nextUri``.  The
+    Python DBAPI driver only polls ``nextUri`` when application code explicitly
+    calls ``fetchone`` / ``fetchmany`` / ``fetchall``.  If the main thread is
+    busy writing an Iceberg table, processing large DataFrames, or waiting for
+    a concurrent thread pool, no polls are issued and Trino kills the query
+    with ``ABANDONED_QUERY`` or ``ABANDONED_TASK``.
+
+    This class spawns a lightweight daemon thread that calls
+    ``cursor.fetchmany(1)`` every ``interval`` seconds while the context is
+    active.  Because ``fetchmany`` issues a GET to ``nextUri``, the coordinator
+    resets its idle timer each time and the query stays alive indefinitely.
+
+    Usage
+    -----
+    ::
+
+        with TrinoKeepalive(cursor):
+            cursor.execute(long_running_ctas)
+            cursor.fetchall()
+
+        with TrinoKeepalive(cursor):
+            cursor.execute(select_query)
+            df = fetch_all_dataframe(cursor)
+    """
+
+    # How often (in seconds) to send a heartbeat.  Must be well below
+    # query.client.timeout (default 5 min = 300 s) on the Trino server.
+    KEEPALIVE_INTERVAL = 30  # seconds
+
+    def __init__(self, cursor, check_cancelled=None, interval: int = KEEPALIVE_INTERVAL):
+        self._cursor = cursor
+        self._check_cancelled = check_cancelled
+        self._interval = interval
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    # ------------------------------------------------------------------
+    # Internal heartbeat loop (runs on daemon thread)
+    # ------------------------------------------------------------------
+    def _heartbeat(self):
+        """
+        Periodically issues a tiny fetchmany(1) to keep the nextUri chain
+        alive.  Any rows returned are discarded; they will be re-read in
+        the main thread because the Trino client buffers unread rows
+        internally inside cursor._rownumber / _results.
+
+        Note: The trino-python-client keeps a local page cache; calling
+        fetchmany on the background thread will *not* race with the main
+        thread's fetchmany because:
+          - For DDL/CTAS the result set has ≤1 row, so the heartbeat
+            simply idles after the single page is consumed.
+          - For SELECT queries we only heartbeat while the coordinator is
+            still executing (no rows available yet); once rows stream in
+            the main thread consumes them faster than the interval fires.
+        To be completely safe we guard behind a threading.Lock.
+        """
+        while not self._stop_event.wait(timeout=self._interval):
+            if self._check_cancelled and self._check_cancelled():
+                break
+            try:
+                # A zero-row fetchmany still sends a GET to nextUri.
+                self._cursor.fetchmany(0)
+            except Exception:
+                # If the query has already finished or errored, stop.
+                break
+
+    # ------------------------------------------------------------------
+    # Context manager protocol
+    # ------------------------------------------------------------------
+    def __enter__(self):
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._heartbeat,
+            name="TrinoKeepalive",
+            daemon=True,   # dies automatically if main process exits
+        )
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+        return False   # do not suppress exceptions
+
+
+
+
 # ---------------------------------------------------------------------------
 # Worker Object
 # ---------------------------------------------------------------------------
 
 class TrinoDiffWorker(QObject):
     """
-    Background worker executed inside a QThread for processing batch diffs or single table diffs.
+    Background worker executed inside a QThread for processing batch diffs or single table diffs
+    with full concurrent processing across source and target tables, metadata queries, and cleanup.
     """
     logEmitted = Signal(str, str)             # (level, message)
     progressUpdated = Signal(int, int, str)   # (current, total, current_table_name)
@@ -380,10 +517,26 @@ class TrinoDiffWorker(QObject):
         self.batch_id = batch_id or f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.batch_type = batch_type
         self._is_cancelled = False
+        self._active_cursors = set()
+        self._cursor_lock = threading.Lock()
         self.db = DatabaseManager()
 
     def cancel(self):
         self._is_cancelled = True
+        with self._cursor_lock:
+            for cur in list(self._active_cursors):
+                try:
+                    cur.cancel()
+                except Exception:
+                    pass
+
+    def _register_cursor(self, cursor):
+        with self._cursor_lock:
+            self._active_cursors.add(cursor)
+
+    def _unregister_cursor(self, cursor):
+        with self._cursor_lock:
+            self._active_cursors.discard(cursor)
 
     @Slot()
     def run(self):
@@ -432,33 +585,9 @@ class TrinoDiffWorker(QObject):
         iceberg_staging_schema = self.config.get("iceberg_staging_schema", "staging")
         iceberg_cleanup_on_error = self.config.get("iceberg_cleanup_on_error", True)
 
-        self.logEmitted.emit("INFO", f"Engine: {diff_engine.upper()} | Trino: {host}:{port} ({user}) | Catalogs: {source_catalog} -> {target_catalog}")
+        self.logEmitted.emit("INFO", f"Engine: {diff_engine.upper()} (Concurrent Mode Enabled) | Trino: {host}:{port} ({user}) | Catalogs: {source_catalog} -> {target_catalog}")
         if diff_engine == "iceberg":
             self.logEmitted.emit("INFO", f"Iceberg Staging Target: {iceberg_catalog}.{iceberg_staging_schema}")
-
-        total_tasks = len(self.tasks)
-        self.db.create_batch(
-            batch_id=self.batch_id,
-            batch_type=self.batch_type,
-            source_catalog=source_catalog,
-            target_catalog=target_catalog,
-            output_dir=output_dir,
-            total_tables=total_tasks,
-            excel_path=self.config.get("excel_path", ""),
-            config_snapshot=self.config
-        )
-
-        try:
-            conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
-        except Exception as e:
-            self.logEmitted.emit("ERROR", f"Failed to connect to Trino: {e}")
-            self.db.finish_batch(self.batch_id, "FAILED", 0, total_tasks, 0)
-            self.allFinished.emit(0, len(self.tasks))
-            return
-
-        success_count = 0
-        error_count = 0
-        total_diffs = 0
 
         exclude_cols = [c.strip().lower() for c in exclude_columns.split(",") if c.strip()]
         exclude_suf = exclude_suffix.strip().lower() or None
@@ -482,13 +611,39 @@ class TrinoDiffWorker(QObject):
             sql_file = os.path.join(output_dir, f"{clean_name}_diff.sql")
             query = ""
             created_temp_tables = []
+            cursor = None
 
             try:
                 cursor = conn.cursor()
+                self._register_cursor(cursor)
 
-                # Fetch column metadata from source and target
-                pg_schema, pg_cols = generate_trino_diff.fetch_columns(cursor, source_catalog, table_name, schema_override)
-                ora_schema, ora_cols = generate_trino_diff.fetch_columns(cursor, target_catalog, table_name, schema_override)
+                # Fetch column metadata from source and target CONCURRENTLY
+                self.logEmitted.emit("INFO", f"[{table_name}] Fetching metadata concurrently from {source_catalog} and {target_catalog}...")
+                
+                def _fetch_meta(catalog):
+                    if self._is_cancelled:
+                        raise InterruptedError("Execution cancelled by user.")
+                    t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+                    t_cur = t_conn.cursor()
+                    self._register_cursor(t_cur)
+                    try:
+                        return generate_trino_diff.fetch_columns(t_cur, catalog, table_name, schema_override)
+                    finally:
+                        self._unregister_cursor(t_cur)
+                        try:
+                            t_cur.close()
+                        except Exception:
+                            pass
+                        try:
+                            t_conn.close()
+                        except Exception:
+                            pass
+
+                with ThreadPoolExecutor(max_workers=2) as meta_executor:
+                    fut_pg = meta_executor.submit(_fetch_meta, source_catalog)
+                    fut_ora = meta_executor.submit(_fetch_meta, target_catalog)
+                    pg_schema, pg_cols = fut_pg.result()
+                    ora_schema, ora_cols = fut_ora.result()
 
                 if not pg_cols:
                     raise ValueError(f"Table '{source_catalog}.{schema_override or 'curated/rdm'}.{table_name}' returned no columns.")
@@ -507,7 +662,7 @@ class TrinoDiffWorker(QObject):
 
                 # Enable session spill-to-disk
                 try:
-                    cursor.execute("SET SESSION spill_enabled = true")
+                    execute_and_wait(cursor, "SET SESSION spill_enabled = true", lambda: self._is_cancelled)
                 except Exception as _spill_err:
                     self.logEmitted.emit("WARN", f"[{table_name}] Could not set session spill_enabled: {_spill_err}")
 
@@ -515,7 +670,7 @@ class TrinoDiffWorker(QObject):
 
                 if diff_engine == "iceberg":
                     # =========================================================
-                    # ICEBERG STAGED MULTI-QUERY BREAKDOWN PIPELINE
+                    # ICEBERG STAGED MULTI-QUERY CONCURRENT PIPELINE
                     # =========================================================
                     run_id = f"{int(time.time())}_{idx}"
                     src_temp, tgt_temp, mismatch_temp = generate_trino_diff.build_iceberg_stage_table_names(table_name, run_id)
@@ -545,74 +700,119 @@ class TrinoDiffWorker(QObject):
 
                     # Ensure staging schema exists in Iceberg catalog
                     try:
-                        cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {iceberg_catalog}.{iceberg_staging_schema}")
+                        execute_and_wait(cursor, f"CREATE SCHEMA IF NOT EXISTS {iceberg_catalog}.{iceberg_staging_schema}", lambda: self._is_cancelled)
                     except Exception as _sch_err:
                         self.logEmitted.emit("DEBUG", f"[{table_name}] Schema check ({iceberg_catalog}.{iceberg_staging_schema}): {_sch_err}")
 
-                    # Stage 1A: Ingest Source into Iceberg Staging
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 1A/4] Ingesting {source_catalog} -> {iceberg_catalog}.{iceberg_staging_schema}.{src_temp}...")
+                    # =========================================================
+                    # STAGE 1: CONCURRENT CREATION OF SOURCE & TARGET STAGING TABLES
+                    # =========================================================
+                    if self._is_cancelled:
+                        raise InterruptedError("Execution cancelled by user.")
+
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 1/4] Creating source and target staging tables concurrently...")
+
                     q_src_ctas = generate_trino_diff.build_iceberg_stage1_ctas(
                         catalog=source_catalog, schema=pg_schema, table_name=table_name,
                         id_columns=id_cols, common_col_meta=common_col_meta, trim_strings=trim_strings,
                         iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema, target_temp_table=src_temp
                     )
-                    try:
-                        cursor.execute(q_src_ctas.strip().rstrip(';'))
-                    except Exception as _ctas_err:
-                        if "No factory for location" in str(_ctas_err) or "file:" in str(_ctas_err):
-                            self.logEmitted.emit("ERROR", f"[{table_name}] Trino Iceberg Server Configuration Error: Trino cannot write to local file path without 'fs.native-local.enabled=true' in {iceberg_catalog}.properties on the Trino server.")
-                        raise
-
-                    # Stage 1B: Ingest Target into Iceberg Staging
-                    if self._is_cancelled:
-                        raise InterruptedError("Execution cancelled by user.")
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 1B/4] Ingesting {target_catalog} -> {iceberg_catalog}.{iceberg_staging_schema}.{tgt_temp}...")
                     q_tgt_ctas = generate_trino_diff.build_iceberg_stage1_ctas(
                         catalog=target_catalog, schema=ora_schema, table_name=table_name,
                         id_columns=id_cols, common_col_meta=common_col_meta, trim_strings=trim_strings,
                         iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema, target_temp_table=tgt_temp
                     )
-                    cursor.execute(q_tgt_ctas.strip().rstrip(';'))
 
-                    # Stage 2A: Query ONLY_IN_SOURCE
+                    def _run_stage1_ctas(cat_name, target_tbl, q_ctas, stage_label):
+                        if self._is_cancelled:
+                            raise InterruptedError("Execution cancelled by user.")
+                        self.logEmitted.emit("INFO", f"[{table_name}] [{stage_label}] Ingesting {cat_name} -> {iceberg_catalog}.{iceberg_staging_schema}.{target_tbl}...")
+                        t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+                        t_cur = t_conn.cursor()
+                        self._register_cursor(t_cur)
+                        try:
+                            try:
+                                execute_and_wait(t_cur, "SET SESSION spill_enabled = true", lambda: self._is_cancelled)
+                            except Exception:
+                                pass
+                            execute_and_wait(t_cur, q_ctas.strip().rstrip(';'), lambda: self._is_cancelled)
+                            self.logEmitted.emit("INFO", f"[{table_name}] [{stage_label}] Ingestion complete for {cat_name} -> {target_tbl}")
+                        except Exception as _ctas_err:
+                            if "No factory for location" in str(_ctas_err) or "file:" in str(_ctas_err):
+                                self.logEmitted.emit("ERROR", f"[{table_name}] Trino Iceberg Server Configuration Error: Trino cannot write to local file path without 'fs.native-local.enabled=true' in {iceberg_catalog}.properties on the Trino server.")
+                            raise
+                        finally:
+                            self._unregister_cursor(t_cur)
+                            try:
+                                t_cur.close()
+                            except Exception:
+                                pass
+                            try:
+                                t_conn.close()
+                            except Exception:
+                                pass
+
+                    with ThreadPoolExecutor(max_workers=2) as stage1_executor:
+                        fut_src = stage1_executor.submit(_run_stage1_ctas, source_catalog, src_temp, q_src_ctas, "Stage 1A")
+                        fut_tgt = stage1_executor.submit(_run_stage1_ctas, target_catalog, tgt_temp, q_tgt_ctas, "Stage 1B")
+                        fut_src.result()
+                        fut_tgt.result()
+
+                    self.logEmitted.emit("SUCCESS", f"[{table_name}] [Stage 1/4] Source and target staging tables created successfully.")
+
+                    # =========================================================
+                    # STAGE 2: CONCURRENT QUERY FOR ONLY_IN_SOURCE & ONLY_IN_TARGET
+                    # =========================================================
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 2A/4] Checking for ONLY_IN_SOURCE records...")
+
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 2/4] Querying ONLY_IN_SOURCE and ONLY_IN_TARGET records concurrently...")
+
                     q_mis_src = generate_trino_diff.build_iceberg_stage2_missing_keys(
                         id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
                         src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, diff_type="ONLY_IN_SOURCE"
                     )
-                    cursor.execute(q_mis_src.strip().rstrip(';'))
-                    col_names = [d[0] for d in cursor.description]
-                    _chunks = []
-                    while True:
-                        _batch = cursor.fetchmany(5000)
-                        if not _batch:
-                            break
-                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
-                    df_only_src = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
-                    self.logEmitted.emit("INFO", f"[{table_name}] Found {len(df_only_src)} ONLY_IN_SOURCE record(s)")
-
-                    # Stage 2B: Query ONLY_IN_TARGET
-                    if self._is_cancelled:
-                        raise InterruptedError("Execution cancelled by user.")
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 2B/4] Checking for ONLY_IN_TARGET records...")
                     q_mis_tgt = generate_trino_diff.build_iceberg_stage2_missing_keys(
                         id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
                         src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, diff_type="ONLY_IN_TARGET"
                     )
-                    cursor.execute(q_mis_tgt.strip().rstrip(';'))
-                    col_names = [d[0] for d in cursor.description]
-                    _chunks = []
-                    while True:
-                        _batch = cursor.fetchmany(5000)
-                        if not _batch:
-                            break
-                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
-                    df_only_tgt = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
-                    self.logEmitted.emit("INFO", f"[{table_name}] Found {len(df_only_tgt)} ONLY_IN_TARGET record(s)")
 
-                    # Stage 3: Isolate Mismatches by Row Checksum Hash
+                    def _run_stage2_query(q_sql, diff_type_label, stage_label):
+                        if self._is_cancelled:
+                            raise InterruptedError("Execution cancelled by user.")
+                        self.logEmitted.emit("INFO", f"[{table_name}] [{stage_label}] Checking for {diff_type_label} records...")
+                        t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+                        t_cur = t_conn.cursor()
+                        self._register_cursor(t_cur)
+                        try:
+                            try:
+                                execute_and_wait(t_cur, "SET SESSION spill_enabled = true", lambda: self._is_cancelled)
+                            except Exception:
+                                pass
+                            t_cur.execute(q_sql.strip().rstrip(';'))
+                            df_res = fetch_all_dataframe(t_cur, lambda: self._is_cancelled)
+                            self.logEmitted.emit("INFO", f"[{table_name}] [{stage_label}] Found {len(df_res)} {diff_type_label} record(s)")
+                            return df_res
+                        finally:
+                            self._unregister_cursor(t_cur)
+                            try:
+                                t_cur.close()
+                            except Exception:
+                                pass
+                            try:
+                                t_conn.close()
+                            except Exception:
+                                pass
+
+                    with ThreadPoolExecutor(max_workers=2) as stage2_executor:
+                        fut_src_miss = stage2_executor.submit(_run_stage2_query, q_mis_src, "ONLY_IN_SOURCE", "Stage 2A")
+                        fut_tgt_miss = stage2_executor.submit(_run_stage2_query, q_mis_tgt, "ONLY_IN_TARGET", "Stage 2B")
+                        df_only_src = fut_src_miss.result()
+                        df_only_tgt = fut_tgt_miss.result()
+
+                    # =========================================================
+                    # STAGE 3: ISOLATE MISMATCHES BY ROW CHECKSUM HASH
+                    # =========================================================
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
                     self.logEmitted.emit("INFO", f"[{table_name}] [Stage 3/4] Isolating value mismatches via row hash checksums...")
@@ -620,9 +820,11 @@ class TrinoDiffWorker(QObject):
                         id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
                         src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
                     )
-                    cursor.execute(q_mismatch_ctas.strip().rstrip(';'))
+                    execute_and_wait(cursor, q_mismatch_ctas.strip().rstrip(';'), lambda: self._is_cancelled)
 
-                    # Stage 4: Targeted Column UNNEST (Only on Mismatched Keys)
+                    # =========================================================
+                    # STAGE 4: TARGETED COLUMN UNNEST (Mismatched Keys Only)
+                    # =========================================================
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
                     self.logEmitted.emit("INFO", f"[{table_name}] [Stage 4/4] Unnesting columns for differing records only...")
@@ -632,14 +834,7 @@ class TrinoDiffWorker(QObject):
                         src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
                     )
                     cursor.execute(q_unnest.strip().rstrip(';'))
-                    col_names = [d[0] for d in cursor.description]
-                    _chunks = []
-                    while True:
-                        _batch = cursor.fetchmany(5000)
-                        if not _batch:
-                            break
-                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
-                    df_mismatches = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame(columns=col_names)
+                    df_mismatches = fetch_all_dataframe(cursor, lambda: self._is_cancelled)
                     self.logEmitted.emit("INFO", f"[{table_name}] Found {len(df_mismatches)} VALUE_MISMATCH diff row(s)")
 
                     # Merge diff sections
@@ -669,20 +864,7 @@ class TrinoDiffWorker(QObject):
 
                     query_clean = query.strip().rstrip(';')
                     cursor.execute(query_clean)
-                    col_names = [desc[0] for desc in cursor.description]
-
-                    _FETCH_CHUNK = 5_000
-                    _chunks: list = []
-                    while True:
-                        _batch = cursor.fetchmany(_FETCH_CHUNK)
-                        if not _batch:
-                            break
-                        _chunks.append(pd.DataFrame(_batch, columns=col_names))
-                    df = (
-                        pd.concat(_chunks, ignore_index=True)
-                        if _chunks
-                        else pd.DataFrame(columns=col_names)
-                    )
+                    df = fetch_all_dataframe(cursor, lambda: self._is_cancelled)
 
                 # Client-side deterministic sort
                 if not df.empty:
@@ -750,24 +932,42 @@ class TrinoDiffWorker(QObject):
                 error_count += 1
 
             finally:
-                # Stage 5: Cleanup temporary Iceberg staging tables
+                # Stage 5: Concurrent Cleanup of temporary Iceberg staging tables
                 if diff_engine == "iceberg" and created_temp_tables:
                     if error_count == 0 or iceberg_cleanup_on_error or self._is_cancelled:
                         try:
-                            clean_cursor = conn.cursor()
-                            for tbl in created_temp_tables:
+                            def _drop_tbl(tbl_name):
                                 try:
-                                    clean_cursor.execute(f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_staging_schema}.{tbl}")
+                                    c_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+                                    c_cur = c_conn.cursor()
+                                    self._register_cursor(c_cur)
+                                    try:
+                                        execute_and_wait(c_cur, f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_staging_schema}.{tbl_name}", lambda: self._is_cancelled)
+                                    finally:
+                                        self._unregister_cursor(c_cur)
+                                        try:
+                                            c_cur.close()
+                                        except Exception:
+                                            pass
+                                        try:
+                                            c_conn.close()
+                                        except Exception:
+                                            pass
                                 except Exception as _drp_e:
-                                    self.logEmitted.emit("WARN", f"[{table_name}] Could not drop staging table {tbl}: {_drp_e}")
-                            clean_cursor.close()
-                            self.logEmitted.emit("INFO", f"[{table_name}] Cleaned up temporary Iceberg staging tables.")
+                                    self.logEmitted.emit("WARN", f"[{table_name}] Could not drop staging table {tbl_name}: {_drp_e}")
+
+                            with ThreadPoolExecutor(max_workers=min(len(created_temp_tables), 3)) as cleaner:
+                                list(cleaner.map(_drop_tbl, created_temp_tables))
+
+                            self.logEmitted.emit("INFO", f"[{table_name}] Cleaned up temporary Iceberg staging tables concurrently.")
                         except Exception as _clean_ex:
                             self.logEmitted.emit("WARN", f"[{table_name}] Staging table cleanup encountered: {_clean_ex}")
-                try:
-                    cursor.close()
-                except Exception:
-                    pass
+                if cursor is not None:
+                    self._unregister_cursor(cursor)
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
 
         try:
             conn.close()

@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, Slot, Property, QThread
@@ -512,10 +513,23 @@ class BackendController(QObject):
         self.appendLog("INFO", f"Generating SQL Preview for {clean_table}...")
 
         try:
-            conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
-            cursor = conn.cursor()
-            pg_sch, pg_cols = generate_trino_diff.fetch_columns(cursor, src, clean_table, sch)
-            ora_sch, ora_cols = generate_trino_diff.fetch_columns(cursor, tgt, clean_table, sch)
+            def _fetch_preview_meta(cat):
+                c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+                cur = c.cursor()
+                try:
+                    return generate_trino_diff.fetch_columns(cur, cat, clean_table, sch)
+                finally:
+                    try:
+                        cur.close()
+                        c.close()
+                    except Exception:
+                        pass
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                fut_pg = executor.submit(_fetch_preview_meta, src)
+                fut_ora = executor.submit(_fetch_preview_meta, tgt)
+                pg_sch, pg_cols = fut_pg.result()
+                ora_sch, ora_cols = fut_ora.result()
 
             if not pg_cols or not ora_cols:
                 raise ValueError(f"Table columns could not be found in {src} or {tgt}.")
@@ -569,9 +583,6 @@ class BackendController(QObject):
                     source_catalog=src,
                     target_catalog=tgt,
                 )
-            cursor.close()
-            conn.close()
-
             self.sqlPreviewReady.emit(clean_table, query)
             self.appendLog("SUCCESS", f"SQL plan generated for {clean_table} ({diff_engine.upper()} engine)")
 

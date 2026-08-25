@@ -38,6 +38,7 @@ python generate_trino_diff.py \\
 import argparse
 import sys
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 # ---------------------------------------------------------------------------
 # Optional Trino client import
@@ -611,22 +612,22 @@ def build_iceberg_pipeline_preview_sql(
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- STAGE 1A: Ingest Source Table into Iceberg Columnar Staging with xxhash64
+-- STAGE 1A: Ingest Source Table into Iceberg Columnar Staging with xxhash64 (Runs Concurrently with Stage 1B)
 -- -----------------------------------------------------------------------------
 {q_src_ctas.strip()};
 
 -- -----------------------------------------------------------------------------
--- STAGE 1B: Ingest Target Table into Iceberg Columnar Staging with xxhash64
+-- STAGE 1B: Ingest Target Table into Iceberg Columnar Staging with xxhash64 (Runs Concurrently with Stage 1A)
 -- -----------------------------------------------------------------------------
 {q_tgt_ctas.strip()};
 
 -- -----------------------------------------------------------------------------
--- STAGE 2A: Query Missing Records in Target (ONLY_IN_SOURCE)
+-- STAGE 2A: Query Missing Records in Target (ONLY_IN_SOURCE - Runs Concurrently with Stage 2B)
 -- -----------------------------------------------------------------------------
 {q_mis_src.strip()};
 
 -- -----------------------------------------------------------------------------
--- STAGE 2B: Query Missing Records in Source (ONLY_IN_TARGET)
+-- STAGE 2B: Query Missing Records in Source (ONLY_IN_TARGET - Runs Concurrently with Stage 2A)
 -- -----------------------------------------------------------------------------
 {q_mis_tgt.strip()};
 
@@ -752,21 +753,29 @@ def main():
     iceberg_schema = args.iceberg_schema
 
     # ------------------------------------------------------------------
-    # Connect and fetch metadata
+    # Connect and fetch metadata concurrently
     # ------------------------------------------------------------------
     if verbose:
         print(f"[INFO] Connecting to Trino at {TRINO_HOST}:{TRINO_PORT} as '{TRINO_USER}'")
+        print(f"[INFO] Fetching columns concurrently for {source_catalog} & {target_catalog} ({schema or 'auto'}.{table_name}) ...")
 
-    conn = get_trino_connection()
-    cursor = conn.cursor()
+    def _fetch_meta_concurrent(cat):
+        c = get_trino_connection()
+        cur = c.cursor()
+        try:
+            return fetch_columns(cur, cat, table_name, schema)
+        finally:
+            try:
+                cur.close()
+                c.close()
+            except Exception:
+                pass
 
-    if verbose:
-        print(f"[INFO] Fetching columns for {source_catalog}.{schema or 'auto'}.{table_name} ...")
-    pg_schema, pg_cols = fetch_columns(cursor, source_catalog, table_name, schema)
-
-    if verbose:
-        print(f"[INFO] Fetching columns for {target_catalog}.{schema or 'auto'}.{table_name} ...")
-    ora_schema, ora_cols = fetch_columns(cursor, target_catalog, table_name, schema)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        fut_pg = executor.submit(_fetch_meta_concurrent, source_catalog)
+        fut_ora = executor.submit(_fetch_meta_concurrent, target_catalog)
+        pg_schema, pg_cols = fut_pg.result()
+        ora_schema, ora_cols = fut_ora.result()
 
     # ------------------------------------------------------------------
     # Corner Case #5: Fail fast if either catalog returns no columns

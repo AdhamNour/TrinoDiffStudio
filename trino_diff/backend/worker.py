@@ -673,8 +673,8 @@ class TrinoDiffWorker(QObject):
                     # ICEBERG STAGED MULTI-QUERY CONCURRENT PIPELINE
                     # =========================================================
                     run_id = f"{int(time.time())}_{idx}"
-                    src_temp, tgt_temp, mismatch_temp = generate_trino_diff.build_iceberg_stage_table_names(table_name, run_id)
-                    created_temp_tables = [src_temp, tgt_temp, mismatch_temp]
+                    src_temp, tgt_temp, _ = generate_trino_diff.build_iceberg_stage_table_names(table_name, run_id)
+                    created_temp_tables = [src_temp, tgt_temp]
 
                     # Save full multi-stage SQL plan to output file
                     query = generate_trino_diff.build_iceberg_pipeline_preview_sql(
@@ -710,7 +710,7 @@ class TrinoDiffWorker(QObject):
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
 
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 1/4] Creating source and target staging tables concurrently...")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 1/3] Creating source and target staging tables concurrently (single-pass CTE + sorted_by)...")
 
                     q_src_ctas = generate_trino_diff.build_iceberg_stage1_ctas(
                         catalog=source_catalog, schema=pg_schema, table_name=table_name,
@@ -758,7 +758,7 @@ class TrinoDiffWorker(QObject):
                         fut_src.result()
                         fut_tgt.result()
 
-                    self.logEmitted.emit("SUCCESS", f"[{table_name}] [Stage 1/4] Source and target staging tables created successfully.")
+                    self.logEmitted.emit("SUCCESS", f"[{table_name}] [Stage 1/3] Source and target staging tables created successfully.")
 
                     # =========================================================
                     # STAGE 2: CONCURRENT QUERY FOR ONLY_IN_SOURCE & ONLY_IN_TARGET
@@ -766,7 +766,7 @@ class TrinoDiffWorker(QObject):
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
 
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 2/4] Querying ONLY_IN_SOURCE and ONLY_IN_TARGET records concurrently...")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 2/3] Querying ONLY_IN_SOURCE and ONLY_IN_TARGET records concurrently...")
 
                     q_mis_src = generate_trino_diff.build_iceberg_stage2_missing_keys(
                         id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
@@ -811,27 +811,15 @@ class TrinoDiffWorker(QObject):
                         df_only_tgt = fut_tgt_miss.result()
 
                     # =========================================================
-                    # STAGE 3: ISOLATE MISMATCHES BY ROW CHECKSUM HASH
+                    # STAGE 3: TARGETED COLUMN UNNEST (Inlined Hash Mismatch Join)
                     # =========================================================
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 3/4] Isolating value mismatches via row hash checksums...")
-                    q_mismatch_ctas = generate_trino_diff.build_iceberg_stage3_mismatch_keys_ctas(
-                        id_columns=id_cols, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
-                        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
-                    )
-                    execute_and_wait(cursor, q_mismatch_ctas.strip().rstrip(';'), lambda: self._is_cancelled)
-
-                    # =========================================================
-                    # STAGE 4: TARGETED COLUMN UNNEST (Mismatched Keys Only)
-                    # =========================================================
-                    if self._is_cancelled:
-                        raise InterruptedError("Execution cancelled by user.")
-                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 4/4] Unnesting columns for differing records only...")
+                    self.logEmitted.emit("INFO", f"[{table_name}] [Stage 3/3] Unnesting columns for value-mismatched records (inlined hash filter)...")
                     q_unnest = generate_trino_diff.build_iceberg_stage4_mismatch_unnest(
                         id_columns=id_cols, common_col_meta=common_col_meta, exclude_cols=exclude_cols,
                         exclude_suffix=exclude_suf, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_staging_schema,
-                        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
+                        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=None
                     )
                     cursor.execute(q_unnest.strip().rstrip(';'))
                     df_mismatches = fetch_all_dataframe(cursor, lambda: self._is_cancelled)

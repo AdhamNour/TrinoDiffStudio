@@ -396,8 +396,15 @@ def build_iceberg_stage1_ctas(
     iceberg_schema: str,
     target_temp_table: str,
 ) -> str:
-    """Generate CTAS statement to ingest source or target into an Iceberg staging table with row hash."""
+    """Generate CTAS statement to ingest source or target into an Iceberg staging table with row hash.
+    
+    Optimizations:
+    1. Single-pass CTE ensures CAST and TRIM expressions are evaluated only once per column.
+    2. xxhash64 row checksum references the pre-casted CTE columns directly with COALESCE.
+    3. sorted_by table property on ID columns enables Parquet row-group min/max statistics for pruning.
+    """
     id_select = ",\n        ".join(f"{quote(ic)}" for ic in id_columns)
+    sorted_by_list = ", ".join(f"'{ic}'" for ic in id_columns)
     
     col_casts = ",\n        ".join(
         f"{build_cast_expr(c['name'], c['data_type'], trim_strings)} AS {quote(c['name'])}"
@@ -405,22 +412,28 @@ def build_iceberg_stage1_ctas(
     )
     
     hash_elements = ",\n            ".join(
-        f"COALESCE({build_cast_expr(c['name'], c['data_type'], trim_strings)}, CHR(0))"
+        f"COALESCE({quote(c['name'])}, CHR(0))"
         for c in common_col_meta
     )
 
     query = f"""\
 CREATE TABLE {iceberg_catalog}.{iceberg_schema}.{target_temp_table}
 WITH (
-    format = 'PARQUET'
+    format = 'PARQUET',
+    sorted_by = ARRAY[{sorted_by_list}]
 ) AS
+WITH casted AS (
+    SELECT
+        {id_select},
+        {col_casts}
+    FROM {catalog}.{schema}.{table_name}
+)
 SELECT
-    {id_select},
-    {col_casts},
+    *,
     xxhash64(to_utf8(CONCAT_WS(CHR(31),
         {hash_elements}
     ))) AS row_hash
-FROM {catalog}.{schema}.{table_name}
+FROM casted
 """
     return query
 
@@ -466,7 +479,7 @@ def build_iceberg_stage3_mismatch_keys_ctas(
     tgt_temp_tbl: str,
     mismatch_temp_tbl: str,
 ) -> str:
-    """Generate CTAS statement isolating mismatched keys via row hash comparison."""
+    """Generate CTAS statement isolating mismatched keys via row hash comparison (retained for backward compatibility)."""
     id_select = ",\n    ".join(f"s.{quote(ic)}" for ic in id_columns)
     join_cond = " AND ".join(f"s.{quote(ic)} = t.{quote(ic)}" for ic in id_columns)
     query = f"""\
@@ -493,27 +506,48 @@ def build_iceberg_stage4_mismatch_unnest(
     iceberg_schema: str,
     src_temp_tbl: str,
     tgt_temp_tbl: str,
-    mismatch_temp_tbl: str,
+    mismatch_temp_tbl: str = None,
 ) -> str:
-    """Generate targeted UNNEST query for only keys that had a hash mismatch."""
-    common_cols = [c["name"] for c in common_col_meta]
+    """Generate targeted UNNEST query for keys with a hash mismatch.
+    
+    Optimizations:
+    1. Pre-filters excluded columns in Python before building the UNNEST arrays,
+       avoiding exploding rows for columns that are excluded.
+    2. Inlines the row_hash comparison (s.row_hash != t.row_hash) directly into the join,
+       eliminating the need for an intermediate mismatch table when mismatch_temp_tbl is None.
+    """
+    excluded_set = {c.strip().lower() for c in (exclude_cols or [])}
+    suffix_lower = exclude_suffix.strip().lower() if exclude_suffix else None
+
+    filtered_col_meta = []
+    for c in common_col_meta:
+        col_lower = c["name"].lower()
+        if col_lower in excluded_set:
+            continue
+        if suffix_lower and col_lower.endswith(suffix_lower):
+            continue
+        filtered_col_meta.append(c)
+
+    active_cols = [c["name"] for c in (filtered_col_meta or common_col_meta)]
     id_select = ",\n    ".join(f"s.{quote(ic)}" for ic in id_columns)
     join_cond_st = " AND ".join(f"s.{quote(ic)} = t.{quote(ic)}" for ic in id_columns)
-    join_cond_sm = " AND ".join(f"s.{quote(ic)} = m.{quote(ic)}" for ic in id_columns)
 
-    col_name_array = ",\n        ".join(f"'{c}'" for c in common_cols)
-    s_val_array = ",\n        ".join(f"s.{quote(c)}" for c in common_cols)
-    t_val_array = ",\n        ".join(f"t.{quote(c)}" for c in common_cols)
+    col_name_array = ",\n        ".join(f"'{c}'" for c in active_cols)
+    s_val_array = ",\n        ".join(f"s.{quote(c)}" for c in active_cols)
+    t_val_array = ",\n        ".join(f"t.{quote(c)}" for c in active_cols)
 
-    mismatch_extra_conds = []
-    if exclude_cols:
-        quoted_list = ", ".join(f"'{c.strip().lower()}'" for c in exclude_cols)
-        mismatch_extra_conds.append(f"AND lower(u.column_name) NOT IN ({quoted_list})")
-    if exclude_suffix:
-        mismatch_extra_conds.append(f"AND lower(u.column_name) NOT LIKE '%{exclude_suffix.strip().lower()}'")
-    mismatch_extra_conditions = (
-        "\n    " + "\n    ".join(mismatch_extra_conds)
-    ) if mismatch_extra_conds else ""
+    if mismatch_temp_tbl:
+        join_cond_sm = " AND ".join(f"s.{quote(ic)} = m.{quote(ic)}" for ic in id_columns)
+        from_clause = f"""FROM {iceberg_catalog}.{iceberg_schema}.{src_temp_tbl} s
+JOIN {iceberg_catalog}.{iceberg_schema}.{tgt_temp_tbl} t
+    ON {join_cond_st}
+JOIN {iceberg_catalog}.{iceberg_schema}.{mismatch_temp_tbl} m
+    ON {join_cond_sm}"""
+    else:
+        from_clause = f"""FROM {iceberg_catalog}.{iceberg_schema}.{src_temp_tbl} s
+JOIN {iceberg_catalog}.{iceberg_schema}.{tgt_temp_tbl} t
+    ON {join_cond_st}
+    AND s.row_hash != t.row_hash"""
 
     query = f"""\
 SELECT
@@ -522,11 +556,7 @@ SELECT
     u.column_name,
     u.postgres_value,
     u.oracle_value
-FROM {iceberg_catalog}.{iceberg_schema}.{src_temp_tbl} s
-JOIN {iceberg_catalog}.{iceberg_schema}.{tgt_temp_tbl} t
-    ON {join_cond_st}
-JOIN {iceberg_catalog}.{iceberg_schema}.{mismatch_temp_tbl} m
-    ON {join_cond_sm}
+{from_clause}
 CROSS JOIN UNNEST(
     ARRAY[
         {col_name_array}
@@ -539,7 +569,7 @@ CROSS JOIN UNNEST(
     ]
 ) AS u(column_name, postgres_value, oracle_value)
 WHERE
-    u.postgres_value IS DISTINCT FROM u.oracle_value{mismatch_extra_conditions}
+    u.postgres_value IS DISTINCT FROM u.oracle_value
 """
     return query
 
@@ -549,14 +579,16 @@ def build_iceberg_cleanup_queries(
     iceberg_schema: str,
     src_temp_tbl: str,
     tgt_temp_tbl: str,
-    mismatch_temp_tbl: str,
+    mismatch_temp_tbl: str = None,
 ) -> list:
     """Generate list of DROP TABLE statements for temporary Iceberg staging tables."""
-    return [
+    queries = [
         f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_schema}.{src_temp_tbl}",
         f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_schema}.{tgt_temp_tbl}",
-        f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_schema}.{mismatch_temp_tbl}",
     ]
+    if mismatch_temp_tbl:
+        queries.append(f"DROP TABLE IF EXISTS {iceberg_catalog}.{iceberg_schema}.{mismatch_temp_tbl}")
+    return queries
 
 
 def build_iceberg_pipeline_preview_sql(
@@ -574,8 +606,8 @@ def build_iceberg_pipeline_preview_sql(
     iceberg_schema: str = "staging",
     run_id: str = "preview",
 ) -> str:
-    """Generate full annotated SQL script displaying the multi-stage Iceberg execution plan."""
-    src_temp, tgt_temp, mismatch_temp = build_iceberg_stage_table_names(table_name, run_id)
+    """Generate full annotated SQL script displaying the optimized multi-stage Iceberg execution plan."""
+    src_temp, tgt_temp, _ = build_iceberg_stage_table_names(table_name, run_id)
     
     q_src_ctas = build_iceberg_stage1_ctas(
         catalog=source_catalog, schema=pg_schema, table_name=table_name,
@@ -595,16 +627,12 @@ def build_iceberg_pipeline_preview_sql(
         id_columns=id_columns, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema,
         src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, diff_type="ONLY_IN_TARGET"
     )
-    q_mismatch_ctas = build_iceberg_stage3_mismatch_keys_ctas(
-        id_columns=id_columns, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema,
-        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
-    )
     q_unnest = build_iceberg_stage4_mismatch_unnest(
         id_columns=id_columns, common_col_meta=common_col_meta, exclude_cols=exclude_cols,
         exclude_suffix=exclude_suffix, iceberg_catalog=iceberg_catalog, iceberg_schema=iceberg_schema,
-        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=mismatch_temp
+        src_temp_tbl=src_temp, tgt_temp_tbl=tgt_temp, mismatch_temp_tbl=None
     )
-    cleanup = build_iceberg_cleanup_queries(iceberg_catalog, iceberg_schema, src_temp, tgt_temp, mismatch_temp)
+    cleanup = build_iceberg_cleanup_queries(iceberg_catalog, iceberg_schema, src_temp, tgt_temp)
 
     preview = f"""\
 -- =============================================================================
@@ -633,21 +661,15 @@ def build_iceberg_pipeline_preview_sql(
 {q_mis_tgt.strip()};
 
 -- -----------------------------------------------------------------------------
--- STAGE 3: Isolate Mismatched Keys into Staging via Row Checksum Hash
--- -----------------------------------------------------------------------------
-{q_mismatch_ctas.strip()};
-
--- -----------------------------------------------------------------------------
--- STAGE 4: Targeted Column UNNEST (Applied ONLY to Mismatched Keys)
+-- STAGE 3: Targeted Column UNNEST (Inlined Hash Filter s.row_hash != t.row_hash)
 -- -----------------------------------------------------------------------------
 {q_unnest.strip()};
 
 -- -----------------------------------------------------------------------------
--- STAGE 5: Cleanup Temporary Iceberg Staging Tables
+-- STAGE 4: Cleanup Temporary Iceberg Staging Tables
 -- -----------------------------------------------------------------------------
 {cleanup[0]};
 {cleanup[1]};
-{cleanup[2]};
 """
     return preview
 

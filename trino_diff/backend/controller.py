@@ -44,6 +44,7 @@ class BackendController(QObject):
     aiDiagnosisFailed = Signal(str, str)      # (table_name, error_message)
     aiDiagnosisLoading = Signal(str, bool)    # (table_name, is_loading)
     ollamaTestFinished = Signal(bool, str)    # (success, message)
+    trinoConnectionStatusChanged = Signal()
 
     def __init__(self, progress_callback=None):
         super().__init__()
@@ -67,6 +68,8 @@ class BackendController(QObject):
         self._progress_val = 0
         self._progress_max = 100
         self._status_text = "Ready"
+        self._trino_connection_status = "unknown"
+        self._trino_connection_message = "Not checked"
         self._worker_thread = None
         self._worker = None
         self._ai_thread = None
@@ -87,6 +90,7 @@ class BackendController(QObject):
         if progress_callback:
             progress_callback(78, "Scanning output catalog & reports directory...")
         self.refreshOutputFiles()
+        self._check_saved_trino_connection()
 
     # -----------------------------------------------------------------------
     # Q_PROPERTY Bindings
@@ -134,6 +138,14 @@ class BackendController(QObject):
     def statusText(self):
         return self._status_text
 
+    @Property(str, notify=trinoConnectionStatusChanged)
+    def trinoConnectionStatus(self):
+        return self._trino_connection_status
+
+    @Property(str, notify=trinoConnectionStatusChanged)
+    def trinoConnectionMessage(self):
+        return self._trino_connection_message
+
     @Property(str, constant=True)
     def appVersion(self):
         return get_app_version()
@@ -168,6 +180,32 @@ class BackendController(QObject):
     # Trino Connection & Catalogs
     # -----------------------------------------------------------------------
 
+    def _set_trino_connection_status(self, status: str, message: str):
+        self._trino_connection_status = status
+        self._trino_connection_message = message
+        self.trinoConnectionStatusChanged.emit()
+
+    def _check_saved_trino_connection(self):
+        self._set_trino_connection_status("checking", "Checking saved connection")
+        host = self._config.get("trino_host", "localhost")
+        port = int(self._config.get("trino_port", 8080))
+        user = self._config.get("trino_user", "admin")
+        password = self._config.get("trino_password", "")
+        scheme = self._config.get("http_scheme", "http")
+        verify_ssl = bool(self._config.get("trino_verify_ssl", True))
+        success, message = test_trino_connection(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            http_scheme=scheme,
+            verify_ssl=verify_ssl,
+        )
+        self._set_trino_connection_status(
+            "connected" if success else "disconnected",
+            message,
+        )
+
     @Slot(str, int, str, str, str, bool, result=str)
     @Slot(result=str)
     def testConnection(self, host: str = None, port: int = None, user: str = None, password: str = None, scheme: str = None, verify_ssl: bool = None) -> str:
@@ -182,11 +220,13 @@ class BackendController(QObject):
         success, msg = test_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
 
         if success:
+            self._set_trino_connection_status("connected", "Connection successful")
             self.appendLog("SUCCESS", "Trino connection verified successfully.")
             self.refreshCatalogs(host, port, user, password, scheme, verify_ssl)
             self.notificationEmitted.emit("success", "Connection successful! Catalogs refreshed.")
             return "SUCCESS"
         else:
+            self._set_trino_connection_status("disconnected", msg)
             self.appendLog("ERROR", f"Trino connection failed: {msg}")
             self.notificationEmitted.emit("error", f"Connection failed: {msg}")
             self._notifier.notify("Trino Connection Failed", f"Could not connect to Trino: {msg}", level="error")
@@ -1238,4 +1278,5 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         save_config(self._config)
         self.configChanged.emit()
         self.notificationEmitted.emit("success", "Settings saved successfully.")
+        self._check_saved_trino_connection()
         self.appendLog("INFO", "Configuration updated and saved.")

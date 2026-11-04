@@ -232,11 +232,23 @@ ApplicationWindow {
                             spacing: 6
                             Rectangle {
                                 width: 8; height: 8; radius: 4
-                                color: Theme.accentEmerald
+                                color: {
+                                    if (!backend) return Theme.textMuted
+                                    if (backend.trinoConnectionStatus === "connected") return Theme.accentEmerald
+                                    if (backend.trinoConnectionStatus === "disconnected") return Theme.accentRose
+                                    if (backend.trinoConnectionStatus === "checking") return Theme.accentAmber
+                                    return Theme.textMuted
+                                }
                                 anchors.verticalCenter: parent.verticalCenter
                             }
                             Text {
-                                text: "Trino"
+                                text: {
+                                    if (!backend) return "Trino"
+                                    if (backend.trinoConnectionStatus === "connected") return "Trino · Connected"
+                                    if (backend.trinoConnectionStatus === "disconnected") return "Trino · Disconnected"
+                                    if (backend.trinoConnectionStatus === "checking") return "Trino · Checking"
+                                    return "Trino · Unknown"
+                                }
                                 font.family: Theme.fontFamily
                                 font.pixelSize: Theme.fontSizeXs
                                 font.weight: Font.DemiBold

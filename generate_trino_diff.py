@@ -56,7 +56,7 @@ TRINO_PORT = 8080
 TRINO_USER = "admin"
 DEFAULT_SOURCE_CATALOG = "postgres"
 DEFAULT_TARGET_CATALOG = "oracle"
-DEFAULT_SCHEMAS = ["curated", "rdm"]
+DEFAULT_SCHEMAS = ["curated", "rdm","historial"]
 ROW_FIELD_HARD_LIMIT    = 32   # Trino ROW() connector field cap
 ROW_FIELD_LIMIT_WARNING = 28   # warn with headroom before the hard limit
 

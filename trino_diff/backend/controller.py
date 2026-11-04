@@ -173,10 +173,11 @@ class BackendController(QObject):
         host = self._config.get("trino_host", "localhost")
         port = int(self._config.get("trino_port", 8080))
         user = self._config.get("trino_user", "admin")
+        password = self._config.get("trino_password", "")
         scheme = self._config.get("http_scheme", "http")
 
         self.appendLog("INFO", f"Testing Trino connection to {host}:{port} ({user})...")
-        success, msg = test_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+        success, msg = test_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
 
         if success:
             self.appendLog("SUCCESS", "Trino connection verified successfully.")
@@ -194,9 +195,10 @@ class BackendController(QObject):
         host = self._config.get("trino_host", "localhost")
         port = int(self._config.get("trino_port", 8080))
         user = self._config.get("trino_user", "admin")
+        password = self._config.get("trino_password", "")
         scheme = self._config.get("http_scheme", "http")
 
-        success, cats, msg = fetch_trino_catalogs(host=host, port=port, user=user, http_scheme=scheme)
+        success, cats, msg = fetch_trino_catalogs(host=host, port=port, user=user, http_scheme=scheme, password=password)
         if success and cats:
             self._catalogs = cats
             self.appendLog("INFO", f"Discovered catalogs: {', '.join(cats)}")
@@ -509,6 +511,7 @@ class BackendController(QObject):
         host = self._config.get("trino_host", "localhost")
         port = int(self._config.get("trino_port", 8080))
         user = self._config.get("trino_user", "admin")
+        password = self._config.get("trino_password", "")
         scheme = self._config.get("http_scheme", "http")
 
         self.appendLog("INFO", f"Generating SQL Preview for {clean_table}...")
@@ -523,7 +526,7 @@ class BackendController(QObject):
                 exclude_suf = raw_exclude_suf.strip().lower() or None
 
                 def _fetch_preview_meta(cat):
-                    c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme)
+                    c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
                     cur = c.cursor()
                     try:
                         return generate_trino_diff.fetch_columns(
@@ -1163,6 +1166,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
     # -----------------------------------------------------------------------
 
     @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool, str, str, str, bool)
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool, str, str, str, bool, str)
     @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool)
     @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str, str, bool)
     def updateSettings(
@@ -1188,6 +1192,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         iceberg_catalog: str = "iceberg",
         iceberg_staging_schema: str = "staging",
         iceberg_cleanup_on_error: bool = True,
+        trino_password: str = "",
     ):
         if isinstance(enable_ai_diagnosis, str):
             # Called with old 16-parameter overload (where arg 13 was ollama_url)
@@ -1206,6 +1211,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         self._config["trino_host"] = host.strip()
         self._config["trino_port"] = port
         self._config["trino_user"] = user.strip()
+        self._config["trino_password"] = trino_password.strip()
         self._config["http_scheme"] = scheme.strip()
         self._config["source_catalog"] = source_cat.strip()
         self._config["target_catalog"] = target_cat.strip()

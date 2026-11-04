@@ -29,6 +29,7 @@ DEFAULT_CONFIG = {
     "trino_host": "localhost",
     "trino_port": 8080,
     "trino_user": "admin",
+    "trino_password": "",
     "http_scheme": "http",
     "source_catalog": "postgres",
     "target_catalog": "oracle",

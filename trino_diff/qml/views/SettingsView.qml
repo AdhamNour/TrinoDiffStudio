@@ -128,6 +128,14 @@ Item {
                             text: (backend && backend.config) ? (backend.config.trino_user || "admin") : "admin"
                         }
 
+                        AppTextField {
+                            id: passwordField
+                            Layout.preferredWidth: 180
+                            label: "Password"
+                            echoMode: TextInput.Password
+                            text: (backend && backend.config) ? (backend.config.trino_password || "") : ""
+                        }
+
                         AppComboBox {
                             id: schemeCombo
                             Layout.preferredWidth: 110
@@ -590,7 +598,8 @@ Item {
                             engineVal,
                             icebergCatalogField.text,
                             icebergSchemaField.text,
-                            icebergCleanupCheck.checked
+                            icebergCleanupCheck.checked,
+                            passwordField.text
                         )
                     }
                 }

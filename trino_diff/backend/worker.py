@@ -575,6 +575,7 @@ class TrinoDiffWorker(QObject):
         port = cfg["port"]
         user = cfg["user"]
         password = cfg["password"]
+        verify_ssl = cfg["verify_ssl"]
         scheme = cfg["scheme"]
         source_catalog = cfg["source_catalog"]
         target_catalog = cfg["target_catalog"]
@@ -602,7 +603,7 @@ class TrinoDiffWorker(QObject):
         cursor = None
 
         try:
-            conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+            conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
             cursor = conn.cursor()
             self._register_cursor(cursor)
 
@@ -612,7 +613,7 @@ class TrinoDiffWorker(QObject):
             def _fetch_meta(catalog):
                 if self._is_cancelled:
                     raise InterruptedError("Execution cancelled by user.")
-                t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+                t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
                 t_cur = t_conn.cursor()
                 self._register_cursor(t_cur)
                 try:
@@ -716,7 +717,7 @@ class TrinoDiffWorker(QObject):
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
                     self.logEmitted.emit("INFO", f"[{table_name}] [{stage_label}] Ingesting {cat_name} -> {iceberg_catalog}.{iceberg_staging_schema}.{target_tbl}...")
-                    t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+                    t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
                     t_cur = t_conn.cursor()
                     self._register_cursor(t_cur)
                     try:
@@ -768,7 +769,7 @@ class TrinoDiffWorker(QObject):
                     if self._is_cancelled:
                         raise InterruptedError("Execution cancelled by user.")
                     self.logEmitted.emit("INFO", f"[{table_name}] [{stage_label}] Checking for {diff_type_label} records...")
-                    t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+                    t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
                     t_cur = t_conn.cursor()
                     self._register_cursor(t_cur)
                     try:
@@ -926,7 +927,7 @@ class TrinoDiffWorker(QObject):
                     try:
                         def _drop_tbl(tbl_name):
                             try:
-                                c_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+                                c_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
                                 c_cur = c_conn.cursor()
                                 self._register_cursor(c_cur)
                                 try:
@@ -968,6 +969,7 @@ class TrinoDiffWorker(QObject):
         port = int(self.config.get("trino_port", 8080))
         user = self.config.get("trino_user", "admin")
         password = self.config.get("trino_password", "")
+        verify_ssl = bool(self.config.get("trino_verify_ssl", True))
         scheme = self.config.get("http_scheme", "http")
         source_catalog = self.config.get("source_catalog", "postgres")
         target_catalog = self.config.get("target_catalog", "oracle")
@@ -1001,7 +1003,7 @@ class TrinoDiffWorker(QObject):
         # Test initial connectivity and ensure Iceberg schema exists
         if diff_engine == "iceberg":
             try:
-                init_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+                init_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
                 init_cur = init_conn.cursor()
                 try:
                     execute_and_wait(init_cur, f"CREATE SCHEMA IF NOT EXISTS {iceberg_catalog}.{iceberg_staging_schema}", lambda: self._is_cancelled)
@@ -1019,6 +1021,7 @@ class TrinoDiffWorker(QObject):
             "port": port,
             "user": user,
             "password": password,
+            "verify_ssl": verify_ssl,
             "scheme": scheme,
             "source_catalog": source_catalog,
             "target_catalog": target_catalog,

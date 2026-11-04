@@ -145,6 +145,15 @@ Item {
                         }
                     }
 
+                    AppCheckBox {
+                        id: disableSslVerificationCheck
+                        text: "Disable HTTPS certificate verification (self-signed certificates)"
+                        visible: schemeCombo.currentText === "https"
+                        checked: backend && backend.config
+                                 ? !(backend.config.trino_verify_ssl !== false)
+                                 : false
+                    }
+
                     // Test Connection row
                     RowLayout {
                         width: parent.width
@@ -157,7 +166,14 @@ Item {
                             enabled: !root.isTesting
                             onClicked: {
                                 root.isTesting  = true
-                                root.testResult = backend ? backend.testConnection() : "ERROR: backend unavailable"
+                                root.testResult = backend ? backend.testConnection(
+                                    hostField.text,
+                                    parseInt(portField.text) || 8080,
+                                    userField.text,
+                                    passwordField.text,
+                                    schemeCombo.currentText,
+                                    !disableSslVerificationCheck.checked
+                                ) : "ERROR: backend unavailable"
                                 root.isTesting  = false
                             }
                         }
@@ -599,7 +615,8 @@ Item {
                             icebergCatalogField.text,
                             icebergSchemaField.text,
                             icebergCleanupCheck.checked,
-                            passwordField.text
+                            passwordField.text,
+                            !disableSslVerificationCheck.checked
                         )
                     }
                 }

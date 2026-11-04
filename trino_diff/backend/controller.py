@@ -168,20 +168,22 @@ class BackendController(QObject):
     # Trino Connection & Catalogs
     # -----------------------------------------------------------------------
 
+    @Slot(str, int, str, str, str, bool, result=str)
     @Slot(result=str)
-    def testConnection(self) -> str:
-        host = self._config.get("trino_host", "localhost")
-        port = int(self._config.get("trino_port", 8080))
-        user = self._config.get("trino_user", "admin")
-        password = self._config.get("trino_password", "")
-        scheme = self._config.get("http_scheme", "http")
+    def testConnection(self, host: str = None, port: int = None, user: str = None, password: str = None, scheme: str = None, verify_ssl: bool = None) -> str:
+        host = (host.strip() if host else self._config.get("trino_host", "localhost"))
+        port = int(port if port else self._config.get("trino_port", 8080))
+        user = (user.strip() if user else self._config.get("trino_user", "admin"))
+        password = (password if password is not None else self._config.get("trino_password", ""))
+        scheme = (scheme.strip() if scheme else self._config.get("http_scheme", "http"))
+        verify_ssl = (bool(verify_ssl) if verify_ssl is not None else bool(self._config.get("trino_verify_ssl", True)))
 
         self.appendLog("INFO", f"Testing Trino connection to {host}:{port} ({user})...")
-        success, msg = test_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+        success, msg = test_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
 
         if success:
             self.appendLog("SUCCESS", "Trino connection verified successfully.")
-            self.refreshCatalogs()
+            self.refreshCatalogs(host, port, user, password, scheme, verify_ssl)
             self.notificationEmitted.emit("success", "Connection successful! Catalogs refreshed.")
             return "SUCCESS"
         else:
@@ -190,15 +192,17 @@ class BackendController(QObject):
             self._notifier.notify("Trino Connection Failed", f"Could not connect to Trino: {msg}", level="error")
             return f"ERROR: {msg}"
 
+    @Slot(str, int, str, str, str, bool)
     @Slot()
-    def refreshCatalogs(self):
-        host = self._config.get("trino_host", "localhost")
-        port = int(self._config.get("trino_port", 8080))
-        user = self._config.get("trino_user", "admin")
-        password = self._config.get("trino_password", "")
-        scheme = self._config.get("http_scheme", "http")
+    def refreshCatalogs(self, host: str = None, port: int = None, user: str = None, password: str = None, scheme: str = None, verify_ssl: bool = None):
+        host = (host.strip() if host else self._config.get("trino_host", "localhost"))
+        port = int(port if port else self._config.get("trino_port", 8080))
+        user = (user.strip() if user else self._config.get("trino_user", "admin"))
+        password = (password if password is not None else self._config.get("trino_password", ""))
+        scheme = (scheme.strip() if scheme else self._config.get("http_scheme", "http"))
+        verify_ssl = bool(verify_ssl) if verify_ssl is not None else bool(self._config.get("trino_verify_ssl", True))
 
-        success, cats, msg = fetch_trino_catalogs(host=host, port=port, user=user, http_scheme=scheme, password=password)
+        success, cats, msg = fetch_trino_catalogs(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
         if success and cats:
             self._catalogs = cats
             self.appendLog("INFO", f"Discovered catalogs: {', '.join(cats)}")
@@ -512,6 +516,7 @@ class BackendController(QObject):
         port = int(self._config.get("trino_port", 8080))
         user = self._config.get("trino_user", "admin")
         password = self._config.get("trino_password", "")
+        verify_ssl = bool(self._config.get("trino_verify_ssl", True))
         scheme = self._config.get("http_scheme", "http")
 
         self.appendLog("INFO", f"Generating SQL Preview for {clean_table}...")
@@ -526,7 +531,7 @@ class BackendController(QObject):
                 exclude_suf = raw_exclude_suf.strip().lower() or None
 
                 def _fetch_preview_meta(cat):
-                    c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password)
+                    c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
                     cur = c.cursor()
                     try:
                         return generate_trino_diff.fetch_columns(
@@ -1165,10 +1170,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
     # Settings
     # -----------------------------------------------------------------------
 
-    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool, str, str, str, bool)
-    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool, str, str, str, bool, str)
-    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool)
-    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, str, str, str, bool)
+    @Slot(str, int, str, str, str, str, str, str, str, bool, bool, bool, bool, str, str, str, bool, str, str, str, bool, str, bool)
     def updateSettings(
         self,
         host: str,
@@ -1193,6 +1195,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         iceberg_staging_schema: str = "staging",
         iceberg_cleanup_on_error: bool = True,
         trino_password: str = "",
+        trino_verify_ssl: bool = True,
     ):
         if isinstance(enable_ai_diagnosis, str):
             # Called with old 16-parameter overload (where arg 13 was ollama_url)
@@ -1212,6 +1215,7 @@ Perform an exhaustive diagnosis and validation formatted cleanly in Markdown:
         self._config["trino_port"] = port
         self._config["trino_user"] = user.strip()
         self._config["trino_password"] = trino_password.strip()
+        self._config["trino_verify_ssl"] = bool(trino_verify_ssl)
         self._config["http_scheme"] = scheme.strip()
         self._config["source_catalog"] = source_cat.strip()
         self._config["target_catalog"] = target_cat.strip()

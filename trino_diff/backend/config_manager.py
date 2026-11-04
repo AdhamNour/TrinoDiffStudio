@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     "trino_port": 8080,
     "trino_user": "admin",
     "trino_password": "",
+    "trino_verify_ssl": True,
     "http_scheme": "http",
     "source_catalog": "postgres",
     "target_catalog": "oracle",

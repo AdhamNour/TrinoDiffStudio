@@ -574,55 +574,54 @@ Item {
                 }
             }
 
-            // ── Save row ─────────────────────────────────────────────────
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Theme.spacingMd
-
-                Item { Layout.fillWidth: true }
-
-                AppButton {
-                    text: "💾  Save Configuration"
-                    variant: "success"
-                    implicitHeight: 40
-                    customPaddingH: 24
-                    onClicked: {
-                        var effortVal = "High"
-                        if (aiEffortCombo.currentIndex === 2) effortVal = "Low"
-                        else if (aiEffortCombo.currentIndex === 1) effortVal = "Medium"
-
-                        var engineVal = (diffEngineCombo.currentIndex === 1) ? "direct" : "iceberg"
-
-                        backend.updateSettings(
-                            hostField.text,
-                            parseInt(portField.text) || 8080,
-                            userField.text,
-                            schemeCombo.currentText,
-                            defaultSourceCatCombo.currentText,
-                            defaultTargetCatCombo.currentText,
-                            outputDirField.text,
-                            excludeColsField.text,
-                            excludeSuffixField.text,
-                            trimStringsCheck.checked,
-                            notifyTableCheck.checked,
-                            notifyBatchCheck.checked,
-                            enableAiSwitch.checked,
-                            ollamaUrlField.text,
-                            ollamaModelField.text,
-                            effortVal,
-                            autoAiCheck.checked,
-                            engineVal,
-                            icebergCatalogField.text,
-                            icebergSchemaField.text,
-                            icebergCleanupCheck.checked,
-                            passwordField.text,
-                            !disableSslVerificationCheck.checked
-                        )
-                    }
-                }
-            }
-
             Item { height: Theme.spacingLg }
+        }
+    }
+
+    AppButton {
+        id: saveButton
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: Theme.spacingLg
+        anchors.bottomMargin: Theme.spacingLg
+        z: 10
+        text: "💾  Save Configuration"
+        variant: "success"
+        implicitHeight: 48
+        customRadius: 24
+        customPaddingH: 24
+        onClicked: {
+            var effortVal = "High"
+            if (aiEffortCombo.currentIndex === 2) effortVal = "Low"
+            else if (aiEffortCombo.currentIndex === 1) effortVal = "Medium"
+
+            var engineVal = (diffEngineCombo.currentIndex === 1) ? "direct" : "iceberg"
+
+            backend.updateSettings(
+                hostField.text,
+                parseInt(portField.text) || 8080,
+                userField.text,
+                schemeCombo.currentText,
+                defaultSourceCatCombo.currentText,
+                defaultTargetCatCombo.currentText,
+                outputDirField.text,
+                excludeColsField.text,
+                excludeSuffixField.text,
+                trimStringsCheck.checked,
+                notifyTableCheck.checked,
+                notifyBatchCheck.checked,
+                enableAiSwitch.checked,
+                ollamaUrlField.text,
+                ollamaModelField.text,
+                effortVal,
+                autoAiCheck.checked,
+                engineVal,
+                icebergCatalogField.text,
+                icebergSchemaField.text,
+                icebergCleanupCheck.checked,
+                passwordField.text,
+                !disableSslVerificationCheck.checked
+            )
         }
     }
 }

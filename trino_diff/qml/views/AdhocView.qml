@@ -121,7 +121,7 @@ Item {
                             id: schemaCombo
                             Layout.preferredWidth: 200
                             label: "Schema"
-                            model: ["auto", "curated", "rdm", "public"]
+                            model: ["auto", "curated", "rdm", "public", "historical"]
                             currentIndex: 0
                         }
                     }

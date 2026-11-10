@@ -19,6 +19,7 @@ from trino_diff.backend.run_logger import (
     RunLogger,
     get_run_log_dir,
     get_run_log_path,
+    new_run_id,
 )
 
 RECORD_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \| [A-Z]{4,7} *\| ")
@@ -39,6 +40,15 @@ class TestRunLogger(unittest.TestCase):
         path = get_run_log_path(self.out, "BATCH_20260101_120000")
         self.assertEqual(path, os.path.join(os.path.abspath(self.out), "logs", "BATCH_20260101_120000.txt"))
         self.assertEqual(os.path.dirname(path), get_run_log_dir(self.out))
+
+    def test_new_run_id_has_random_8_char_suffix_and_is_unique(self):
+        ids = {new_run_id("BATCH") for _ in range(200)}
+        self.assertEqual(len(ids), 200)
+        for run_id in ids:
+            self.assertRegex(run_id, r"^BATCH_\d{8}_\d{6}_[0-9a-f]{8}$")
+        self.assertRegex(new_run_id("ADHOC"), r"^ADHOC_\d{8}_\d{6}_[0-9a-f]{8}$")
+        # same-second runs get different log files
+        self.assertNotEqual(get_run_log_path(self.out, new_run_id("BATCH")), get_run_log_path(self.out, new_run_id("BATCH")))
 
     def test_run_id_cannot_escape_the_logs_folder(self):
         path = get_run_log_path(self.out, "../evil/BATCH 1")

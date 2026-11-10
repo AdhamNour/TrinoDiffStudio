@@ -8,6 +8,7 @@ Every batch / single-table diff run is traced in a plain-text file stored in
 
 import os
 import re
+import secrets
 import threading
 from datetime import datetime
 from typing import Any, Optional, Sequence, Tuple
@@ -18,6 +19,15 @@ LOG_FILE_TYPE = "Log"  # file_type stored in output_files and shown in the Outpu
 
 _RULE = "=" * 80
 _CONTINUATION_INDENT = "    "
+
+
+def new_run_id(prefix: str) -> str:
+    """Return a unique run (batch) id such as ``BATCH_20260101_120000_a1b2c3d4``.
+
+    The random 8-character hex suffix keeps ids, and therefore log file names and
+    batch rows, unique even for two runs started within the same second.
+    """
+    return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(4)}"
 
 
 def get_run_log_dir(output_dir: str) -> str:

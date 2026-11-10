@@ -54,6 +54,9 @@ DEFAULT_CONFIG = {
 }
 
 
+LEGACY_SCHEMAS = {"curated", "rdm"}
+
+
 def migrate_config(config: dict) -> tuple:
     """
     Upgrade legacy persisted config values in-place.
@@ -61,13 +64,16 @@ def migrate_config(config: dict) -> tuple:
 
     Saved configurations are merged over DEFAULT_CONFIG, so a changed default never
     reaches existing installs unless we rewrite the stored value. Here we upgrade a
-    legacy 'default_schemas' of exactly 'curated, rdm' (the old factory default) to
-    the new default which also searches 'historical'. Genuinely custom schema lists
-    are left untouched.
+    legacy 'default_schemas' that only names the old factory schemas ('curated' and/or
+    'rdm', in any order, case, spacing or with duplicates) to the new default, which
+    also searches 'historical'. Genuinely custom schema lists are left untouched.
     """
-    raw = str(config.get("default_schemas", "") or "")
-    normalized = ",".join(p.strip().lower() for p in raw.split(",") if p.strip())
-    if normalized in ("", "curated,rdm"):
+    raw = config.get("default_schemas", "")
+    if isinstance(raw, str):
+        parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    else:
+        parts = [str(p).strip().lower() for p in (raw or []) if str(p).strip()]
+    if not parts or set(parts) <= LEGACY_SCHEMAS:
         config["default_schemas"] = DEFAULT_CONFIG["default_schemas"]
         return config, True
     return config, False

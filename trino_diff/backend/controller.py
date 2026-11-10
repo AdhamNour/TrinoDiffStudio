@@ -18,7 +18,7 @@ from trino_diff.backend.worker import TrinoDiffWorker
 from trino_diff.backend.notifier import WindowsNotifier
 from trino_diff.backend.ollama_client import query_ollama, extract_sql_from_response, test_ollama_connection
 from trino_diff.backend.db_manager import DatabaseManager
-from trino_diff.backend.run_logger import get_run_log_dir, LOG_FILE_EXT, LOG_FILE_TYPE
+from trino_diff.backend.run_logger import get_run_log_dir, new_run_id, LOG_FILE_EXT, LOG_FILE_TYPE
 from trino_diff.version import get_app_version
 import generate_trino_diff
 
@@ -340,7 +340,7 @@ class BackendController(QObject):
         self._progress_val = 0
         self._progress_max = len(tasks)
         self._status_text = f"Processing 0/{len(tasks)} tables..."
-        batch_id = f"BATCH_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        batch_id = new_run_id("BATCH")
         self._current_batch_id = batch_id
         self.currentBatchIdChanged.emit()
         self.runningStateChanged.emit()
@@ -407,7 +407,7 @@ class BackendController(QObject):
         if trim_strings is not None:
             cfg_copy["trim_strings"] = trim_strings
 
-        batch_id = f"ADHOC_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        batch_id = new_run_id("ADHOC")
         self._current_batch_id = batch_id
         self.currentBatchIdChanged.emit()
 

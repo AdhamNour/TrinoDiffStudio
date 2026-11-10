@@ -2,10 +2,11 @@ import os
 import sys
 import time
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pandas as pd
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot, Qt
 
 # Add project root to path so we can import generate_trino_diff and helpers
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,6 +18,8 @@ if PROJECT_ROOT not in sys.path:
 import generate_trino_diff
 from trino_diff.backend.trino_client import get_trino_connection
 from trino_diff.backend.db_manager import DatabaseManager
+from trino_diff.backend.run_logger import RunLogger, LOG_FILE_TYPE
+from trino_diff.version import get_app_version
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +534,13 @@ class TrinoDiffWorker(QObject):
         self._active_cursors = set()
         self._cursor_lock = threading.Lock()
         self.db = DatabaseManager()
+        self.output_dir = self.config.get("output_dir", os.path.join(PROJECT_ROOT, "output"))
+        self.run_log = RunLogger(self.output_dir, self.batch_id)
+        self._run_log_warned = False
+        # Every emitted log line is also persisted to the run's text file. A direct connection
+        # writes it synchronously on the emitting thread, so the file stays complete even if
+        # the UI event loop is busy or the app is closed mid-run.
+        self.logEmitted.connect(self.run_log.write, Qt.ConnectionType.DirectConnection)
 
     def cancel(self):
         self._is_cancelled = True
@@ -926,6 +936,8 @@ class TrinoDiffWorker(QObject):
                 finished_at=tbl_finished_at
             )
             self.logEmitted.emit("ERROR", f"[{table_name}] Error: {error_msg}")
+            if not isinstance(ex, InterruptedError):
+                self.run_log.write("DEBUG", f"[{table_name}] Traceback:\n{traceback.format_exc()}")
             self.tableStatusUpdated.emit(table_name, "Error", 0)
             self.tableErrorOccurred.emit(table_name, error_msg, query)
             
@@ -981,6 +993,80 @@ class TrinoDiffWorker(QObject):
 
     @Slot()
     def run(self):
+        started = datetime.now()
+        try:
+            self._write_run_log_header(started)
+            status, success_count, error_count, total_diffs = self._run_tables()
+        except Exception as exc:
+            self.logEmitted.emit("ERROR", f"Run aborted by an unexpected error: {exc}")
+            self.run_log.write("DEBUG", f"Traceback:\n{traceback.format_exc()}")
+            self._write_run_log_footer(started, "ABORTED")
+            raise
+        self._write_run_log_footer(started, status, success_count, error_count, total_diffs)
+        self.allFinished.emit(success_count, error_count)
+
+    def _write_run_log_header(self, started: datetime):
+        """Write the run context (never the password) at the top of the run's text log."""
+        cfg = self.config
+        engine = str(cfg.get("diff_engine", "iceberg")).lower()
+        if engine == "iceberg":
+            engine += f" (staging: {cfg.get('iceberg_catalog', 'iceberg')}.{cfg.get('iceberg_staging_schema', 'staging')})"
+        tables = [
+            f"{i}. {t.get('table_name', '?')} (schema: {t.get('schema') or 'auto'}; "
+            f"id columns: {', '.join(map(str, t.get('id_columns') or []))})"
+            for i, t in enumerate(self.tasks, start=1)
+        ]
+        fields = [
+            ("Batch ID", self.batch_id),
+            ("Run type", "Single table (ad-hoc)" if self.batch_type == "ADHOC" else "Batch"),
+            ("Started", started.strftime("%Y-%m-%d %H:%M:%S")),
+            ("App version", get_app_version()),
+            (
+                "Trino",
+                f"{cfg.get('trino_host', 'localhost')}:{cfg.get('trino_port', 8080)} "
+                f"(user: {cfg.get('trino_user', 'admin')}, scheme: {cfg.get('http_scheme', 'http')}, "
+                f"verify SSL: {cfg.get('trino_verify_ssl', True)})",
+            ),
+            ("Catalogs", f"{cfg.get('source_catalog', 'postgres')} -> {cfg.get('target_catalog', 'oracle')}"),
+            ("Diff engine", engine),
+            ("Search schemas", cfg.get("default_schemas", "")),
+            ("Excluded columns", cfg.get("exclude_columns", "")),
+            ("Excluded suffix", cfg.get("exclude_suffix", "")),
+            ("Trim strings", cfg.get("trim_strings", True)),
+            ("Output directory", os.path.abspath(self.output_dir)),
+        ]
+        if self.batch_type != "ADHOC":
+            fields.append(("Mapping file", cfg.get("excel_path", "")))
+        fields.append((f"Tables ({len(tables)})", tables))
+        self.run_log.write_block("Trino Diff Studio - Run Log", fields)
+        self._warn_if_run_log_failed()
+
+    def _write_run_log_footer(self, started: datetime, status: str, success_count=None, error_count=None, total_diffs=None):
+        """Write the run summary, then link the log file to the batch so it shows in the Output Explorer."""
+        finished = datetime.now()
+        fields = [
+            ("Batch ID", self.batch_id),
+            ("Status", status),
+            ("Finished", finished.strftime("%Y-%m-%d %H:%M:%S")),
+            ("Duration", f"{(finished - started).total_seconds():.1f} s"),
+        ]
+        if success_count is not None:
+            fields += [
+                ("Tables succeeded", success_count),
+                ("Tables failed", error_count),
+                ("Total diff rows", total_diffs),
+            ]
+        self.run_log.write_block("Run Summary", fields)
+        self._warn_if_run_log_failed()
+        self.db.record_output_file(self.batch_id, None, self.run_log.path, LOG_FILE_TYPE)
+
+    def _warn_if_run_log_failed(self):
+        if self.run_log.error and not self._run_log_warned:
+            self._run_log_warned = True
+            self.logEmitted.emit("WARN", f"Run log could not be saved to {self.run_log.path}: {self.run_log.error}")
+
+    def _run_tables(self) -> tuple:
+        """Execute every task; returns (final_status, success_count, error_count, total_diffs)."""
         host = self.config.get("trino_host", "localhost")
         port = int(self.config.get("trino_port", 8080))
         user = self.config.get("trino_user", "admin")
@@ -989,7 +1075,7 @@ class TrinoDiffWorker(QObject):
         scheme = self.config.get("http_scheme", "http")
         source_catalog = self.config.get("source_catalog", "postgres")
         target_catalog = self.config.get("target_catalog", "oracle")
-        output_dir = self.config.get("output_dir", os.path.join(PROJECT_ROOT, "output"))
+        output_dir = self.output_dir
         exclude_columns = self.config.get("exclude_columns", "")
         exclude_suffix = self.config.get("exclude_suffix", "")
         trim_strings = self.config.get("trim_strings", True)
@@ -998,6 +1084,7 @@ class TrinoDiffWorker(QObject):
 
         total_tasks = len(self.tasks)
         self.logEmitted.emit("INFO", f"Starting execution for {total_tasks} table(s) [Batch: {self.batch_id}]")
+        self.logEmitted.emit("INFO", f"Run log file: {self.run_log.path}")
         self.logEmitted.emit("INFO", f"Trino: {host}:{port} ({user}) | Catalogs: {source_catalog} -> {target_catalog}")
 
         self.db.create_batch(
@@ -1128,4 +1215,4 @@ class TrinoDiffWorker(QObject):
         self.db.finish_batch(self.batch_id, final_status, success_count, error_count, total_diffs)
 
         self.logEmitted.emit("INFO", f"Execution finished [Batch: {self.batch_id}]. Succeeded: {success_count}, Failed: {error_count}")
-        self.allFinished.emit(success_count, error_count)
+        return final_status, success_count, error_count, total_diffs

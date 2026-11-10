@@ -13,6 +13,17 @@ Item {
     property string ollamaTestResult: ""
     property bool   isTestingOllama:  false
 
+    function runLogsDirectory() {
+        var outputDirectory = outputDirField.text.trim()
+        var separator = Qt.platform.os === "windows" ? "\\" : "/"
+        if (!outputDirectory)
+            return "logs"
+        outputDirectory = outputDirectory.replace(/[\\/]+$/, "")
+        if (!outputDirectory)
+            return separator + "logs"
+        return outputDirectory + separator + "logs"
+    }
+
     FolderDialog {
         id: folderDialog
         title: "Select Output Directory"
@@ -299,6 +310,15 @@ Item {
                             Layout.alignment: Qt.AlignBottom
                             onClicked: folderDialog.open()
                         }
+                    }
+
+                    Text {
+                        text: "Run logs will be saved to: " + root.runLogsDirectory()
+                        font.family: Theme.monoFontFamily
+                        font.pixelSize: Theme.fontSizeXs
+                        color: Theme.textSecondary
+                        width: parent.width
+                        wrapMode: Text.WrapAnywhere
                     }
 
                     AppCheckBox {

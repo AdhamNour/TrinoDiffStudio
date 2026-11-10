@@ -138,6 +138,27 @@ Item {
                 color: Theme.textMuted
                 Layout.alignment: Qt.AlignVCenter
             }
+
+            AppButton {
+                text: "📄 Open Run Log"
+                variant: "ghost"
+                implicitHeight: 32
+                Layout.alignment: Qt.AlignVCenter
+                enabled: !!(backend && backend.runLogPath)
+                ToolTip.visible: hovered
+                ToolTip.text: (backend && backend.runLogPath) ? backend.runLogPath : "Start a batch or a single table diff to create a run log file"
+                onClicked: backend.openRunLog()
+            }
+
+            AppButton {
+                text: "📁 Logs Folder"
+                variant: "ghost"
+                implicitHeight: 32
+                Layout.alignment: Qt.AlignVCenter
+                ToolTip.visible: hovered
+                ToolTip.text: "Open the folder that holds the text log of every run"
+                onClicked: backend.openRunLogsFolder()
+            }
         }
 
         // Console Log Area

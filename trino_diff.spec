@@ -85,6 +85,7 @@ hiddenimports = [
     'trino_diff.backend.db_models',
     'trino_diff.backend.excel_loader',
     'trino_diff.backend.ollama_client',
+    'trino_diff.backend.run_logger',
     'trino_diff.backend.trino_client',
     'trino_diff.backend.config_manager',
     'generate_trino_diff',

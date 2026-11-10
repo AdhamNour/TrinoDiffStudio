@@ -18,6 +18,7 @@ from trino_diff.backend.worker import TrinoDiffWorker
 from trino_diff.backend.notifier import WindowsNotifier
 from trino_diff.backend.ollama_client import query_ollama, extract_sql_from_response, test_ollama_connection
 from trino_diff.backend.db_manager import DatabaseManager
+from trino_diff.backend.run_logger import get_run_log_dir, LOG_FILE_EXT, LOG_FILE_TYPE
 from trino_diff.version import get_app_version
 import generate_trino_diff
 
@@ -34,6 +35,7 @@ class BackendController(QObject):
     outputFilesChanged = Signal()
     batchesChanged = Signal()
     currentBatchIdChanged = Signal()
+    runLogPathChanged = Signal()
     configChanged = Signal()
     runningStateChanged = Signal()
     progressChanged = Signal()
@@ -62,6 +64,7 @@ class BackendController(QObject):
         self.db = DatabaseManager()
         self._batches = self.db.get_batches_list()
         self._current_batch_id = ""
+        self._run_log_path = ""
         self._selected_batch_filter = ""
         self._table_errors = {}
         self._is_running = False
@@ -120,6 +123,11 @@ class BackendController(QObject):
     def currentBatchId(self):
         return self._current_batch_id
 
+    @Property(str, notify=runLogPathChanged)
+    def runLogPath(self):
+        """Text log file of the current (or most recent) diff run; empty until a run starts."""
+        return self._run_log_path
+
     @Property(dict, notify=configChanged)
     def config(self):
         return self._config
@@ -175,6 +183,23 @@ class BackendController(QObject):
     def clearLogs(self):
         self._logs = []
         self.logsChanged.emit()
+
+    def _set_run_log_path(self, path: str):
+        self._run_log_path = path
+        self.runLogPathChanged.emit()
+
+    @Slot()
+    def openRunLog(self):
+        """Open the text log of the current (or most recent) diff run."""
+        if not self._run_log_path:
+            self.notificationEmitted.emit("warning", "No run log yet. Start a batch or a single table diff first.")
+            return
+        self.openFile(self._run_log_path)
+
+    @Slot()
+    def openRunLogsFolder(self):
+        output_dir = self._config.get("output_dir", os.path.join(PROJECT_ROOT, "output"))
+        self.openFolder(get_run_log_dir(output_dir))
 
     # -----------------------------------------------------------------------
     # Trino Connection & Catalogs
@@ -325,6 +350,7 @@ class BackendController(QObject):
         # Create worker & thread
         self._worker_thread = QThread()
         self._worker = TrinoDiffWorker(tasks, self._config, batch_id=batch_id, batch_type="BATCH")
+        self._set_run_log_path(self._worker.run_log.path)
         self._worker.moveToThread(self._worker_thread)
 
         self._worker.logEmitted.connect(self.appendLog)
@@ -395,6 +421,7 @@ class BackendController(QObject):
 
         self._worker_thread = QThread()
         self._worker = TrinoDiffWorker([task], cfg_copy, batch_id=batch_id, batch_type="ADHOC")
+        self._set_run_log_path(self._worker.run_log.path)
         self._worker.moveToThread(self._worker_thread)
 
         self._worker.logEmitted.connect(self.appendLog)
@@ -703,39 +730,39 @@ class BackendController(QObject):
             self.outputFilesChanged.emit()
             return
 
-        # Otherwise, scan disk directory and synchronize with SQLite in bulk
+        # Otherwise, scan disk directories (reports + per-run logs) and synchronize with SQLite in bulk
         files = []
         bulk_entries = []
-        if os.path.exists(output_dir):
-            for fn in sorted(os.listdir(output_dir), reverse=True):
-                fp = os.path.join(output_dir, fn)
-                if os.path.isfile(fp):
-                    ext = os.path.splitext(fn)[1].lower()
-                    if ext in (".xlsx", ".sql", ".parquet"):
-                        st = os.stat(fp)
-                        size_kb = round(st.st_size / 1024, 1)
-                        mod_time = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-                        if ext == ".xlsx":
-                            ftype = "Excel"
-                        elif ext == ".parquet":
-                            ftype = "Parquet"
-                        else:
-                            ftype = "SQL"
+        scan_targets = [
+            (output_dir, {".xlsx": "Excel", ".parquet": "Parquet", ".sql": "SQL"}),
+            (get_run_log_dir(output_dir), {LOG_FILE_EXT: LOG_FILE_TYPE}),
+        ]
+        for scan_dir, type_by_ext in scan_targets:
+            if not os.path.isdir(scan_dir):
+                continue
+            for fn in sorted(os.listdir(scan_dir), reverse=True):
+                fp = os.path.join(scan_dir, fn)
+                ftype = type_by_ext.get(os.path.splitext(fn)[1].lower())
+                if not ftype or not os.path.isfile(fp):
+                    continue
+                st = os.stat(fp)
+                size_kb = round(st.st_size / 1024, 1)
+                mod_time = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
 
-                        bulk_entries.append({
-                            "batch_id": None,
-                            "table_name": None,
-                            "file_path": fp,
-                            "file_type": ftype
-                        })
+                bulk_entries.append({
+                    "batch_id": None,
+                    "table_name": None,
+                    "file_path": fp,
+                    "file_type": ftype
+                })
 
-                        files.append({
-                            "name": fn,
-                            "path": fp,
-                            "type": ftype,
-                            "size": f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 1)} MB",
-                            "modified": mod_time,
-                        })
+                files.append({
+                    "name": fn,
+                    "path": fp,
+                    "type": ftype,
+                    "size": f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb / 1024, 1)} MB",
+                    "modified": mod_time,
+                })
 
         if bulk_entries:
             self.db.record_output_files_bulk(bulk_entries)

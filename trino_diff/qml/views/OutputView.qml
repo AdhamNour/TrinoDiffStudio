@@ -286,6 +286,12 @@ Item {
                     implicitHeight: 32
                     onClicked: root.typeFilter = "SQL"
                 }
+                AppButton {
+                    text: "Run Logs (.txt)"
+                    variant: root.typeFilter === "Log" ? "primary" : "ghost"
+                    implicitHeight: 32
+                    onClicked: root.typeFilter = "Log"
+                }
             }
 
             Item { Layout.fillWidth: true }
@@ -343,15 +349,18 @@ Item {
                             implicitHeight: 34
                             radius: Theme.radiusSm
                             color: modelData.type === "Excel" ? "#064E3B"
-                                 : (modelData.type === "Parquet" ? "#3B0764" : "#451A03")
+                                 : (modelData.type === "Parquet" ? "#3B0764"
+                                 : (modelData.type === "Log" ? "#0C4A6E" : "#451A03"))
                             border.color: modelData.type === "Excel" ? "#059669"
-                                        : (modelData.type === "Parquet" ? "#9333EA" : "#F59E0B")
+                                        : (modelData.type === "Parquet" ? "#9333EA"
+                                        : (modelData.type === "Log" ? "#0EA5E9" : "#F59E0B"))
                             border.width: 1
 
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.type === "Excel" ? "📊"
-                                    : (modelData.type === "Parquet" ? "📦" : "⚡")
+                                    : (modelData.type === "Parquet" ? "📦"
+                                    : (modelData.type === "Log" ? "📝" : "⚡"))
                                 font.pixelSize: 14
                             }
                         }
@@ -381,7 +390,8 @@ Item {
                         // Actions
                         AppButton {
                             text: modelData.type === "Excel" ? "Open Excel"
-                                : (modelData.type === "Parquet" ? "Open Parquet" : "Edit / Open")
+                                : (modelData.type === "Parquet" ? "Open Parquet"
+                                : (modelData.type === "Log" ? "Open Log" : "Edit / Open"))
                             variant: "secondary"
                             implicitHeight: 30
                             onClicked: backend.openFile(modelData.path)
@@ -423,7 +433,7 @@ Item {
                 Text {
                     text: root.selectedBatchId !== "ALL"
                           ? "No output files linked to Batch " + root.selectedBatchId
-                          : "Generated diff SQL queries and Excel reports will appear here."
+                          : "Generated diff SQL queries, Excel reports and run logs will appear here."
                     font.family: Theme.fontFamily
                     font.pixelSize: Theme.fontSizeBase
                     color: Theme.textMuted

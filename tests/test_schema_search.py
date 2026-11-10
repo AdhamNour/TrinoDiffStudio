@@ -157,6 +157,12 @@ class TestMigrateConfig(unittest.TestCase):
             self.assertTrue(changed, legacy)
             self.assertEqual(cfg["default_schemas"], DEFAULT_CONFIG["default_schemas"])
 
+    def test_legacy_other_orders_and_duplicates_upgraded(self):
+        for legacy in ("rdm, curated", "RDM,Curated", "rdm", "curated", "curated, rdm, curated", ["rdm", "curated"]):
+            cfg, changed = migrate_config({"default_schemas": legacy})
+            self.assertTrue(changed, legacy)
+            self.assertEqual(cfg["default_schemas"], DEFAULT_CONFIG["default_schemas"])
+
     def test_empty_or_missing_upgraded(self):
         for raw in ({}, {"default_schemas": ""}, {"default_schemas": None}):
             cfg, changed = migrate_config(dict(raw))

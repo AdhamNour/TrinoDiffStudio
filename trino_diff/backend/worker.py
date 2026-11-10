@@ -608,9 +608,14 @@ class TrinoDiffWorker(QObject):
             self._register_cursor(cursor)
 
             # Fetch column metadata from source and target CONCURRENTLY
-            self.logEmitted.emit("INFO", f"[{table_name}] Fetching metadata concurrently from {source_catalog} and {target_catalog}...")
+            search_schemas = cfg.get("search_schemas") or None
+            schemas_label = schema_override or "/".join(search_schemas or generate_trino_diff.DEFAULT_SCHEMAS)
+            self.logEmitted.emit("INFO", f"[{table_name}] Fetching metadata concurrently from {source_catalog} and {target_catalog} (schemas: {schemas_label})...")
 
-            def _fetch_meta(catalog):
+            pg_found_schemas: list = []
+            ora_found_schemas: list = []
+
+            def _fetch_meta(catalog, found_out):
                 if self._is_cancelled:
                     raise InterruptedError("Execution cancelled by user.")
                 t_conn = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
@@ -624,7 +629,9 @@ class TrinoDiffWorker(QObject):
                         schema_override,
                         exclude_cols=exclude_cols,
                         exclude_suffix=exclude_suf,
-                        id_columns=id_cols
+                        id_columns=id_cols,
+                        search_schemas=search_schemas,
+                        found_schemas=found_out,
                     )
                 finally:
                     self._unregister_cursor(t_cur)
@@ -638,15 +645,21 @@ class TrinoDiffWorker(QObject):
                         pass
 
             with ThreadPoolExecutor(max_workers=2) as meta_executor:
-                fut_pg = meta_executor.submit(_fetch_meta, source_catalog)
-                fut_ora = meta_executor.submit(_fetch_meta, target_catalog)
+                fut_pg = meta_executor.submit(_fetch_meta, source_catalog, pg_found_schemas)
+                fut_ora = meta_executor.submit(_fetch_meta, target_catalog, ora_found_schemas)
                 pg_schema, pg_cols = fut_pg.result()
                 ora_schema, ora_cols = fut_ora.result()
 
             if not pg_cols:
-                raise ValueError(f"Table '{source_catalog}.{schema_override or 'curated/rdm'}.{table_name}' returned no columns.")
+                raise ValueError(f"Table '{source_catalog}.{schemas_label}.{table_name}' returned no columns.")
             if not ora_cols:
-                raise ValueError(f"Table '{target_catalog}.{schema_override or 'curated/rdm'}.{table_name}' returned no columns.")
+                raise ValueError(f"Table '{target_catalog}.{schemas_label}.{table_name}' returned no columns.")
+
+            self.logEmitted.emit("INFO", f"[{table_name}] Resolved schemas → {source_catalog}.{pg_schema} | {target_catalog}.{ora_schema}")
+            if len(pg_found_schemas) > 1:
+                self.logEmitted.emit("WARN", f"[{table_name}] Table exists in multiple {source_catalog} schemas {pg_found_schemas}; using '{pg_schema}' by precedence order.")
+            if len(ora_found_schemas) > 1:
+                self.logEmitted.emit("WARN", f"[{table_name}] Table exists in multiple {target_catalog} schemas {ora_found_schemas}; using '{ora_schema}' by precedence order.")
 
             pg_name_map = {c["name"]: c for c in pg_cols}
             ora_name_map = {c["name"]: c for c in ora_cols}
@@ -869,13 +882,16 @@ class TrinoDiffWorker(QObject):
                 self.logEmitted.emit("SUCCESS", f"[{table_name}] Saved Excel report → {os.path.basename(report_file)}")
 
             tbl_finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            resolved_schema = pg_schema or ora_schema or schema_override
+            if pg_schema and ora_schema and pg_schema != ora_schema:
+                resolved_schema = f"{pg_schema}/{ora_schema}"
             self.db.record_table_result(
                 batch_id=self.batch_id,
                 table_name=table_name,
                 status="Completed",
                 diff_count=diff_count,
                 id_columns=id_cols,
-                schema_name=pg_schema or ora_schema or schema_override,
+                schema_name=resolved_schema,
                 sql_file_path=sql_file,
                 report_file_path=report_file,
                 report_file_type="PARQUET" if diff_count > MAX_EXCEL_ROWS else "EXCEL",
@@ -1015,6 +1031,7 @@ class TrinoDiffWorker(QObject):
 
         exclude_cols = [c.strip().lower() for c in exclude_columns.split(",") if c.strip()]
         exclude_suf = exclude_suffix.strip().lower() or None
+        search_schemas = generate_trino_diff.parse_schema_list(self.config.get("default_schemas", ""))
 
         cfg = {
             "host": host,
@@ -1033,6 +1050,7 @@ class TrinoDiffWorker(QObject):
             "iceberg_catalog": iceberg_catalog,
             "iceberg_staging_schema": iceberg_staging_schema,
             "iceberg_cleanup_on_error": iceberg_cleanup_on_error,
+            "search_schemas": search_schemas or None,
         }
 
         pipeline_enabled = self.config.get("pipeline_enabled", True)

@@ -9,7 +9,7 @@ Connection defaults: localhost:8080, user=admin, no password.
 
 Usage Examples
 --------------
-# Minimal (auto-detects schema between 'curated' and 'rdm', default catalogs 'postgres' and 'oracle')
+# Minimal (auto-detects schema across 'curated', 'rdm' and 'historical', default catalogs 'postgres' and 'oracle')
 python generate_trino_diff.py --table-name fct_product_financial_transactions --id-column transaction_id
 
 # Dynamic Catalogs
@@ -56,7 +56,7 @@ TRINO_PORT = 8080
 TRINO_USER = "admin"
 DEFAULT_SOURCE_CATALOG = "postgres"
 DEFAULT_TARGET_CATALOG = "oracle"
-DEFAULT_SCHEMAS = ["curated", "rdm","historial"]
+DEFAULT_SCHEMAS = ["curated", "rdm", "historical"]
 ROW_FIELD_HARD_LIMIT    = 32   # Trino ROW() connector field cap
 ROW_FIELD_LIMIT_WARNING = 28   # warn with headroom before the hard limit
 
@@ -115,6 +115,15 @@ def get_trino_connection():
     )
 
 
+def parse_schema_list(value) -> list:
+    """Normalise a comma-separated string or iterable of schema names into a clean
+    lowercase list. Returns [] when nothing usable is provided."""
+    if not value:
+        return []
+    parts = value.split(",") if isinstance(value, str) else list(value)
+    return [p.strip().lower() for p in parts if p and p.strip()]
+
+
 def fetch_columns(
     cursor,
     catalog: str,
@@ -123,11 +132,16 @@ def fetch_columns(
     exclude_cols: list = None,
     exclude_suffix: str = None,
     id_columns: list = None,
+    search_schemas: list = None,
+    found_schemas: list = None,
 ) -> tuple:
     """
     Fetch column metadata (name + data_type) from information_schema in a single roundtrip,
     filtering out excluded column names and suffixes early at metadata retrieval time.
-    If schema is not specified, tries DEFAULT_SCHEMAS ('curated', 'rdm') in precedence order.
+    If schema is not specified, tries search_schemas (default: DEFAULT_SCHEMAS —
+    'curated', 'rdm', 'historical') in precedence order.
+    When found_schemas (a list) is provided, it is populated with every searched schema
+    in which the table exists, so callers can warn about ambiguous matches.
     Returns a tuple: (schema_found, [{'name': str, 'data_type': str}, ...])
     """
     id_set = {ic.strip().lower() for ic in (id_columns or []) if ic and ic.strip()}
@@ -166,7 +180,8 @@ def fetch_columns(
             return schema, _filter_cols(cols)
         return schema, []
 
-    schemas_in = ", ".join(f"'{s}'" for s in DEFAULT_SCHEMAS)
+    schemas = parse_schema_list(search_schemas) or list(DEFAULT_SCHEMAS)
+    schemas_in = ", ".join(f"'{s}'" for s in schemas)
     sql = (
         "SELECT table_schema, column_name, data_type "
         f"FROM {catalog}.information_schema.columns "
@@ -177,14 +192,19 @@ def fetch_columns(
     cursor.execute(sql)
     rows = cursor.fetchall()
     if not rows:
-        return DEFAULT_SCHEMAS[0], []
+        return schemas[0], []
 
     by_schema = {}
     for r in rows:
         sch_name, col_name, dt = r[0], r[1], r[2].lower()
         by_schema.setdefault(sch_name, []).append({"name": col_name, "data_type": dt})
 
-    for sch in DEFAULT_SCHEMAS:
+    if found_schemas is not None:
+        ordered_found = [s for s in schemas if s in by_schema]
+        ordered_found += sorted(s for s in by_schema if s not in schemas)
+        found_schemas.extend(ordered_found)
+
+    for sch in schemas:
         if sch in by_schema:
             return sch, _filter_cols(by_schema[sch])
 
@@ -748,7 +768,7 @@ def main():
     )
     parser.add_argument(
         "--schema", default=None,
-        help="Schema name (e.g. 'curated' or 'rdm'). If omitted, automatically checks 'curated' then 'rdm'.",
+        help="Schema name (e.g. 'curated', 'rdm' or 'historical'). If omitted, automatically checks 'curated', then 'rdm', then 'historical'.",
     )
     parser.add_argument(
         "--source-catalog", "--postgres-catalog", dest="source_catalog",

@@ -300,7 +300,7 @@ Item {
                                     onClicked: {
                                         tableNameField.text = "fct_customer_blocks"
                                         idColsField.text = "customer_id,account_number,block_code,system_name,block_type,entry_sequence"
-                                        schemaCombo.currentIndex = 1
+                                        schemaCombo.currentIndex = Math.max(0, schemaCombo.model.indexOf("curated"))
                                     }
                                 }
                             }
@@ -345,7 +345,7 @@ Item {
                                     onClicked: {
                                         tableNameField.text = "ref_t24_sector"
                                         idColsField.text = "sector_code"
-                                        schemaCombo.currentIndex = 2
+                                        schemaCombo.currentIndex = Math.max(0, schemaCombo.model.indexOf("rdm"))
                                     }
                                 }
                             }

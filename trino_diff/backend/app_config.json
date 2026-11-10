@@ -7,7 +7,7 @@
     "http_scheme": "http",
     "source_catalog": "postgres",
     "target_catalog": "oracle",
-    "default_schemas": "curated, rdm",
+    "default_schemas": "curated, rdm, historical",
     "output_dir": "C:/Users/anhassan/Diff Analysis",
     "excel_path": "C:/Users/anhassan/Documents/Adham's Assigned Table.xlsx",
     "exclude_columns": "extraction_timestamp",

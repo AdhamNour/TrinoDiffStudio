@@ -570,7 +570,11 @@ class BackendController(QObject):
                 exclude_cols = [c.strip().lower() for c in raw_exclude_cols.split(",") if c.strip()]
                 exclude_suf = raw_exclude_suf.strip().lower() or None
 
-                def _fetch_preview_meta(cat):
+                search_schemas = generate_trino_diff.parse_schema_list(self._config.get("default_schemas", ""))
+                pg_found_schemas: list = []
+                ora_found_schemas: list = []
+
+                def _fetch_preview_meta(cat, found_out):
                     c = get_trino_connection(host=host, port=port, user=user, http_scheme=scheme, password=password, verify_ssl=verify_ssl)
                     cur = c.cursor()
                     try:
@@ -581,7 +585,9 @@ class BackendController(QObject):
                             sch,
                             exclude_cols=exclude_cols,
                             exclude_suffix=exclude_suf,
-                            id_columns=id_cols
+                            id_columns=id_cols,
+                            search_schemas=search_schemas,
+                            found_schemas=found_out,
                         )
                     finally:
                         try:
@@ -591,13 +597,27 @@ class BackendController(QObject):
                             pass
 
                 with ThreadPoolExecutor(max_workers=2) as executor:
-                    fut_pg = executor.submit(_fetch_preview_meta, src)
-                    fut_ora = executor.submit(_fetch_preview_meta, tgt)
+                    fut_pg = executor.submit(_fetch_preview_meta, src, pg_found_schemas)
+                    fut_ora = executor.submit(_fetch_preview_meta, tgt, ora_found_schemas)
                     pg_sch, pg_cols = fut_pg.result()
                     ora_sch, ora_cols = fut_ora.result()
 
                 if not pg_cols or not ora_cols:
-                    raise ValueError(f"Table columns could not be found in {src} or {tgt}.")
+                    searched = sch or "/".join(search_schemas or generate_trino_diff.DEFAULT_SCHEMAS)
+                    missing = []
+                    if not pg_cols:
+                        missing.append(f"{src}.{searched}.{clean_table}")
+                    if not ora_cols:
+                        missing.append(f"{tgt}.{searched}.{clean_table}")
+                    raise ValueError(
+                        "No columns found for " + " and ".join(missing) +
+                        ". Check the table name, searched schemas and catalogs."
+                    )
+
+                self.appendLog("INFO", f"[{clean_table}] Resolved schemas → {src}.{pg_sch} | {tgt}.{ora_sch}")
+                for cat, found, resolved in ((src, pg_found_schemas, pg_sch), (tgt, ora_found_schemas, ora_sch)):
+                    if len(found) > 1:
+                        self.appendLog("WARN", f"[{clean_table}] Table exists in multiple {cat} schemas {found}; using '{resolved}' by precedence order.")
 
                 pg_name_map = {c["name"]: c for c in pg_cols}
                 ora_name_map = {c["name"]: c for c in ora_cols}

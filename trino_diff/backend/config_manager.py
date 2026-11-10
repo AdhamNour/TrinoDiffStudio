@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
     "http_scheme": "http",
     "source_catalog": "postgres",
     "target_catalog": "oracle",
-    "default_schemas": "curated, rdm",
+    "default_schemas": "curated, rdm, historical",
     "output_dir": DEFAULT_OUTPUT_DIR,
     "excel_path": DEFAULT_EXCEL_PATH,
     "exclude_columns": "extraction_timestamp",
@@ -54,6 +54,25 @@ DEFAULT_CONFIG = {
 }
 
 
+def migrate_config(config: dict) -> tuple:
+    """
+    Upgrade legacy persisted config values in-place.
+    Returns (config, changed).
+
+    Saved configurations are merged over DEFAULT_CONFIG, so a changed default never
+    reaches existing installs unless we rewrite the stored value. Here we upgrade a
+    legacy 'default_schemas' of exactly 'curated, rdm' (the old factory default) to
+    the new default which also searches 'historical'. Genuinely custom schema lists
+    are left untouched.
+    """
+    raw = str(config.get("default_schemas", "") or "")
+    normalized = ",".join(p.strip().lower() for p in raw.split(",") if p.strip())
+    if normalized in ("", "curated,rdm"):
+        config["default_schemas"] = DEFAULT_CONFIG["default_schemas"]
+        return config, True
+    return config, False
+
+
 def load_config() -> dict:
     """
     Load configuration from SQLite database if available,
@@ -64,6 +83,9 @@ def load_config() -> dict:
     if db_config:
         config = DEFAULT_CONFIG.copy()
         config.update(db_config)
+        config, migrated = migrate_config(config)
+        if migrated:
+            db.save_app_config(config)
         return config
 
     # Fallback to app_config.json
@@ -73,6 +95,7 @@ def load_config() -> dict:
                 saved = json.load(f)
                 config = DEFAULT_CONFIG.copy()
                 config.update(saved)
+                config, _ = migrate_config(config)
                 # Seed into SQLite
                 db.save_app_config(config)
                 return config

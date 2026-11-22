@@ -370,6 +370,11 @@ def build_direct_query(
     p_row_cols = ", ".join(f"p.{quote(c)}" for c in common_cols)
     o_row_cols = ", ".join(f"o.{quote(c)}" for c in common_cols)
 
+    # ---- column wise comparison expressions ----
+    col_comparisons = " OR\n        ".join(
+        f"p.{quote(c)} IS DISTINCT FROM o.{quote(c)}" for c in common_cols
+    )
+
     # ---- UNNEST arrays — must match common_cols order exactly ----
     col_name_array = ",\n            ".join(f"'{c}'" for c in common_cols)
     p_val_array = ",\n            ".join(f"d.p_{c}" for c in common_cols)
@@ -407,9 +412,8 @@ WITH diff_data AS (
         --{null_where_p}
         --OR 
         {null_where_o}
-        OR ROW({p_row_cols})
-           IS DISTINCT FROM
-           ROW({o_row_cols})
+        OR 
+        {col_comparisons}
     )
 )
 SELECT

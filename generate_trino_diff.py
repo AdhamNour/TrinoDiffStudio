@@ -407,9 +407,9 @@ WITH diff_data AS (
         --{null_where_p}
         --OR 
         {null_where_o}
-        --OR ROW({p_row_cols})
-          -- IS DISTINCT FROM
-           --ROW({o_row_cols})
+        OR ROW({p_row_cols})
+           IS DISTINCT FROM
+           ROW({o_row_cols})
     )
 )
 SELECT

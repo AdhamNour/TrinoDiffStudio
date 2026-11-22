@@ -401,14 +401,15 @@ WITH diff_data AS (
         -- Target values cast to VARCHAR for uniform unpivoting
 {o_casts}
     FROM {source_catalog}.{pg_schema}.{table_name} p
-    FULL OUTER JOIN {target_catalog}.{ora_schema}.{table_name} o
+    LEFT OUTER JOIN {target_catalog}.{ora_schema}.{table_name} o
         ON {join_parts}
     WHERE (
-        {null_where_p}
-        OR {null_where_o}
-        OR ROW({p_row_cols})
-           IS DISTINCT FROM
-           ROW({o_row_cols})
+        --{null_where_p}
+        --OR 
+        {null_where_o}
+        --OR ROW({p_row_cols})
+          -- IS DISTINCT FROM
+           --ROW({o_row_cols})
     )
 )
 SELECT
